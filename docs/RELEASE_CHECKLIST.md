@@ -58,7 +58,22 @@ zsh -n scripts/easysourceflow
 
 For workflow changes, parse the YAML and confirm full-history checkout uses `fetch-depth: 0`. Pin downloaded security tools and validate their checksums.
 
-## 4. Push and Verify the Remote
+## 4. Publish a Version
+
+EasySourceFlow follows semantic versioning. The single version source is `src/easysourceflow_core/__init__.py`; package metadata, HTTP, and MCP read it automatically.
+
+Before publishing a release:
+
+1. Update `__version__` and the version badge in `README.md`.
+2. Add a dated entry to `CHANGELOG.md` and update the matching milestone in `docs/ROADMAP.md`.
+3. Run all release checks and commit the release changes.
+4. Create an annotated tag such as `git tag -a v0.2.0 -m "EasySourceFlow v0.2.0"`.
+5. Push the commit and tag, then create a GitHub Release from that tag.
+6. Verify that the Release page, tag, changelog, and CI all show the same version.
+
+Do not reuse or move an existing public version tag. Fix a released version with a new patch version instead.
+
+## 5. Push and Verify the Remote
 
 - Confirm the GitHub account, repository, visibility, and default branch.
 - Push only after local scans and tests pass.
@@ -67,7 +82,7 @@ For workflow changes, parse the YAML and confirm full-history checkout uses `fet
 - Inspect the remote tree to confirm private and ignored files are absent.
 - Do not install or use GitHub plugins without user approval.
 
-## 5. History Rewrite Procedure
+## 6. History Rewrite Procedure
 
 Rewrite public history only when necessary and only after explicit user approval.
 
@@ -82,7 +97,7 @@ Rewrite public history only when necessary and only after explicit user approval
 
 GitHub may temporarily retain unreachable objects addressable by their old SHA. Report this limitation; contact GitHub Support only when immediate removal is required for genuinely sensitive data.
 
-## 6. Shell and Verification Pitfalls
+## 7. Shell and Verification Pitfalls
 
 - Check each command's exit status; do not let a later successful command hide an earlier failure.
 - In zsh, do not use `path` as a loop variable because it changes the command search path.

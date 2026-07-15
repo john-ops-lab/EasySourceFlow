@@ -1,14 +1,15 @@
 # EasySourceFlow
 
-把链接交给 Agent，把结构化 Markdown 带回你的本地知识工作流。
+把长文和长视频交给 Agent，先看总结，再决定要不要看完。
 
-EasySourceFlow 是一个面向 Agent 的本地内容处理服务：统一完成网页提取、视频字幕、本地 ASR、模型总结、任务恢复和结果归档，并通过 MCP、HTTP 与 Web 控制台提供同一套能力。
+无论是在飞书、微信还是其他通讯工具中，只需把网页、公众号文章、视频链接或文件发给你的 Agent。Agent 会调用 EasySourceFlow 提取内容、生成结构化总结，并把结果直接发回当前对话，帮你快速判断内容是否值得深入阅读或观看。
 
 [快速开始](#快速开始) · [Agent 接入](#agent-接入) · [支持的来源](#支持的来源) · [隐私与安全](#隐私与安全) · [完整文档](#完整文档)
 
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-本地优先-111111?logo=apple&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-Agent%20Ready-00A67E)
+[![Version](https://img.shields.io/badge/version-v0.1.0-FF0000)](CHANGELOG.md)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ![EasySourceFlow Web 控制台](docs/assets/web-console.png)
@@ -196,6 +197,7 @@ scripts/easysourceflow regression
 
 ## 完整文档
 
+- [版本更新记录](CHANGELOG.md)
 - [配置说明](docs/CONFIGURATION.md)
 - [Agent 接入指南](docs/AGENT_INTEGRATION.md)
 - [MCP API](docs/MCP_API.md)

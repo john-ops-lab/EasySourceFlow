@@ -12,12 +12,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from easysourceflow_core import __version__
 from easysourceflow_core.url_utils import detect_source_type
 
 
 BASE_URL = os.environ.get("EASYSOURCEFLOW_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
 logger = logging.getLogger(__name__)
-_CLIENT_HEADERS = {"x-easysourceflow-client": "mcp", "user-agent": "EasySourceFlow-MCP/0.1"}
+_CLIENT_HEADERS = {"x-easysourceflow-client": "mcp", "user-agent": f"EasySourceFlow-MCP/{__version__}"}
 
 
 TOOLS = [
@@ -285,7 +286,7 @@ def handle_message(message: Any) -> Dict[str, Any] | None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "easysourceflow_mcp", "version": "0.1.0"},
+                "serverInfo": {"name": "easysourceflow_mcp", "version": __version__},
             },
         }
     if method == "tools/list":

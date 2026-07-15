@@ -1,37 +1,26 @@
-# Changelog
+# 更新日志
 
-All notable changes to EasySourceFlow will be documented in this file.
+EasySourceFlow 使用[语义化版本](https://semver.org/lang/zh-CN/)。正式发布的版本会同时出现在本文件、Git 标签和 GitHub Release 中。在 `1.0.0` 之前，次版本可能包含不兼容调整，补丁版本保持向后兼容。
 
-This project follows semantic versioning while it remains pre-1.0: minor versions may include breaking changes, and patch versions should be backward compatible.
+## 未发布
 
-## [Unreleased]
+- 暂无。
 
-### Added
+## [0.1.0] - 2026-07-15
 
-- Official EasySourceFlow Agent Skill with workflows for direct Markdown delivery, Pro video summaries, and favorites.
-- MCP tool annotations, structured results, and strict argument validation.
-- Agent integration guide and reusable Skill installer command.
+首个公开版本。
 
-### Fixed
+### 新增
 
-- Malformed JSON-RPC input now returns a protocol error instead of terminating the MCP process.
-- Removed private development identifiers from LaunchAgent defaults and security scan examples.
+- 面向 Agent 的 MCP、HTTP 和 Web 三种入口。
+- 网页、微信公众号、Bilibili、YouTube 实验能力和本地文档处理。
+- 平台字幕优先、本地 ASR 回退及字幕来源标记。
+- OpenAI-compatible 模型配置、Fast/Pro 模型选择和通用总结提示词。
+- 可恢复任务队列、SQLite 缓存、全文搜索、资源包和收藏夹。
+- macOS LaunchAgent、自检、备份、清理预览、日志轮转和维护任务。
+- 匿名化发布检查、Gitleaks 和多 Python 版本 CI。
 
-### Security
+### 说明
 
-- Added a redacted Gitleaks scan for the current tree and complete visible Git history in CI.
-
-## [0.1.0] - 2026-07-02
-
-### Added
-
-- Local HTTP daemon and Web console for link, document, and video summarization.
-- stdio MCP adapter for local agents.
-- Web, WeChat, Bilibili, document upload, subtitle, and local ASR flows.
-- Markdown output packages, favorites, search, cleanup, backup, and launchd helpers.
-- OpenAI-compatible model configuration.
-
-### Notes
-
-- Default runtime is local-only at `127.0.0.1:8765`.
-- macOS is the primary supported platform; Linux is expected to work for daemon/MCP flows but is not fully validated.
+- 当前主要支持 macOS 本地部署。
+- YouTube 字幕和部分受限页面仍可能依赖 Cookie 或浏览器配置。

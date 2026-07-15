@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from base64 import b64encode
 from unittest.mock import patch
 
+from easysourceflow_core import __version__
 from easysourceflow_core.config import Settings
 from easysourceflow_core.http_api import _open_resource_package, build_server
 from easysourceflow_mcp.server import (
@@ -143,8 +144,9 @@ class HttpAndMcpTests(unittest.TestCase):
                         headers={"x-easysourceflow-client": "mcp"},
                         method="GET",
                     )
-                    with urlopen(heartbeat, timeout=10):
-                        pass
+                    with urlopen(heartbeat, timeout=10) as response:
+                        health = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(health["version"], __version__)
                     with urlopen(f"{base_url}/agent/status", timeout=10) as response:
                         after = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(after["state"], "connected")
@@ -539,6 +541,7 @@ class HttpAndMcpTests(unittest.TestCase):
             proc.stdin.flush()
             init_response = json.loads(proc.stdout.readline())
             self.assertEqual(init_response["result"]["serverInfo"]["name"], "easysourceflow_mcp")
+            self.assertEqual(init_response["result"]["serverInfo"]["version"], __version__)
 
             proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n")
             proc.stdin.flush()

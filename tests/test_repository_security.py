@@ -10,6 +10,14 @@ MAINTENANCE_LABEL = "app.easysourceflow.maintenance"
 
 
 class RepositorySecurityTests(unittest.TestCase):
+    def test_package_version_has_one_source(self):
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        package = (ROOT / "src" / "easysourceflow_core" / "__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn('dynamic = ["version"]', pyproject)
+        self.assertIn('version = { attr = "easysourceflow_core.__version__" }', pyproject)
+        self.assertRegex(package, r'__version__ = "\d+\.\d+\.\d+"')
+
     def test_launchagent_defaults_are_project_owned(self):
         script = (ROOT / "scripts" / "easysourceflow").read_text(encoding="utf-8")
         example = (ROOT / ".env.example").read_text(encoding="utf-8")

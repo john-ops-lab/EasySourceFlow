@@ -1839,7 +1839,7 @@ INDEX_HTML = """<!doctype html>
       const data = await getJson('/health');
       const runtime = data.runtime || {};
       const checks = runtime.checks || [];
-      $('health-pill').textContent = runtime.ok ? '正常' : '需处理';
+      $('health-pill').textContent = `${runtime.ok ? '正常' : '需处理'} · v${data.version || '-'}`;
       $('service-dot').className = `service-dot ${runtime.ok ? 'ok' : 'bad'}`;
       $('service-label').textContent = runtime.ok ? '服务正常' : '服务需处理';
       $('health').innerHTML = checks.map((check) => `

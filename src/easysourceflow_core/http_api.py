@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .config import DEFAULT_SUMMARY_PROMPT, Settings, default_bilibili_cookies_file, effective_bilibili_cookies_file
 from .backup import backup_artifacts
 from .errors import EasySourceFlowError
@@ -105,7 +106,7 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
     service = EasySourceFlowService(settings)
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "easysourceflowd/0.1"
+        server_version = f"easysourceflowd/{__version__}"
 
         def log_message(self, format: str, *args: object) -> None:
             logger.info("http request client=%s %s", self.client_address[0], format % args)
@@ -121,7 +122,7 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 self._html(render_index())
                 return
             if parsed.path == "/health":
-                self._json({"ok": True, "service": "easysourceflowd", "runtime": service.health()})
+                self._json({"ok": True, "service": "easysourceflowd", "version": __version__, "runtime": service.health()})
                 return
             if parsed.path == "/outputs":
                 self._json(list_outputs(settings.output_dir))
