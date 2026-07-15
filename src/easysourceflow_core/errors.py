@@ -67,8 +67,8 @@ def need_cookies(message: str) -> EasySourceFlowError:
         code="need_cookies",
         message=message,
         next_steps=[
-            "Use a public video that can be accessed without login, or log in with a dedicated Bilibili account.",
-            "Export cookies to a file or enable a controlled browser-cookie integration in a future version.",
-            "Retry at a lower frequency if Bilibili is rate-limiting this machine.",
+            "Open the source in the local browser and confirm the account can access it.",
+            "Import the platform login state from the EasySourceFlow Web maintenance page.",
+            "Retry later if the platform is rate-limiting this machine.",
         ],
     )

@@ -44,6 +44,7 @@ Commands:
   rotate-logs Rotate the service log if it is larger than the threshold
   regression Run a local smoke regression
   bilibili-regression [manifest] [--force-refresh]  Run opt-in real Bilibili regressions
+  youtube-regression [manifest] [--force-refresh]   Run opt-in real YouTube regressions
   asr-eval <reference> <hypothesis> [duration]  Compare ASR output with a reference
   install-skill <agent-workspace>  Install the official Agent skill
   cleanup-preview  Preview old artifact cleanup
@@ -195,7 +196,17 @@ status_service() {
 
 health_service() {
   cd "${ROOT_DIR}"
-  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.health
+  if [[ -f "${PLIST_FILE}" && -x "${RUNTIME_PYTHON}" && -f "${RUNTIME_SRC}/easysourceflow_core/health.py" ]]; then
+    env \
+      PYTHONPATH="${RUNTIME_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
+      EASYSOURCEFLOW_CONFIG_FILE="${RUNTIME_ENV}" \
+      EASYSOURCEFLOW_DATA_DIR="${RUNTIME_DATA}" \
+      EASYSOURCEFLOW_DATABASE="${RUNTIME_DATA}/easysourceflow.sqlite3" \
+      EASYSOURCEFLOW_OUTPUT_DIR="${RUNTIME_OUTPUT}" \
+      "${RUNTIME_PYTHON}" -m easysourceflow_core.health
+  else
+    env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.health
+  fi
 }
 
 open_console() {
@@ -460,6 +471,17 @@ run_bilibili_regression() {
     "${manifest}" --base-url "${BASE_URL}" --timeout "${EASYSOURCEFLOW_REGRESSION_TIMEOUT:-7200}" "$@"
 }
 
+run_youtube_regression() {
+  local manifest="${ROOT_DIR}/docs/youtube_regression_samples.json"
+  if [[ "${1:-}" != "" && "${1:-}" != --* ]]; then
+    manifest="$1"
+    shift
+  fi
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.bilibili_regression \
+    "${manifest}" --base-url "${BASE_URL}" --timeout "${EASYSOURCEFLOW_REGRESSION_TIMEOUT:-7200}" "$@"
+}
+
 run_asr_eval() {
   local reference="${1:-}"
   local hypothesis="${2:-}"
@@ -610,6 +632,10 @@ case "${command}" in
   bilibili-regression)
     shift
     run_bilibili_regression "$@"
+    ;;
+  youtube-regression)
+    shift
+    run_youtube_regression "$@"
     ;;
   asr-eval)
     run_asr_eval "${2:-}" "${3:-}" "${4:-}"

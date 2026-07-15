@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from .config import Settings, effective_bilibili_cookies_file
+from .config import Settings, effective_bilibili_cookies_file, effective_youtube_cookies_file
 
 
 def run_health_checks(settings: Settings) -> dict:
@@ -22,6 +22,7 @@ def run_health_checks(settings: Settings) -> dict:
         _check_transcription_backend(settings),
         _check_document_parsers(),
         _check_bilibili_cookies(settings),
+        _check_youtube_cookies(settings),
         _check_wechat_extractor(),
     ]
     ok = all(item["ok"] for item in checks if item["required"])
@@ -126,6 +127,36 @@ def _check_bilibili_cookies(settings: Settings) -> dict:
     if path.stat().st_size == 0:
         return _result("bilibili_cookies", False, "Bilibili cookies file is empty.", required=False, fix="Re-export cookies; do not paste cookie contents into chat or logs.")
     return _result("bilibili_cookies", True, "Bilibili cookies file exists.", required=False)
+
+
+def _check_youtube_cookies(settings: Settings) -> dict:
+    cookies_file = effective_youtube_cookies_file(settings)
+    if not cookies_file:
+        return _result(
+            "youtube_cookies",
+            False,
+            "YouTube cookies file is not configured.",
+            required=False,
+            fix="Log in to YouTube in Chrome, then import the login state from Web maintenance.",
+        )
+    path = Path(cookies_file).expanduser()
+    if not path.exists():
+        return _result(
+            "youtube_cookies",
+            False,
+            f"YouTube cookies file does not exist: {path}",
+            required=False,
+            fix="Update EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE or import the Chrome login state again.",
+        )
+    if path.stat().st_size == 0:
+        return _result(
+            "youtube_cookies",
+            False,
+            "YouTube cookies file is empty.",
+            required=False,
+            fix="Import the Chrome login state again; do not paste cookie contents into chat or logs.",
+        )
+    return _result("youtube_cookies", True, "YouTube cookies file exists.", required=False)
 
 
 def _check_wechat_extractor() -> dict:

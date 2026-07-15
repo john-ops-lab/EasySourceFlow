@@ -40,9 +40,11 @@ class WebConsoleBrowserTests(unittest.TestCase):
                     page.goto(url, wait_until="networkidle")
                     self.assertIn("EasySourceFlow", page.title())
                     self.assertTrue(page.locator("#submit-panel").is_visible())
+                    page.locator(".advanced-settings summary").click()
                     self.assertTrue(page.locator("#force-refresh").is_visible())
 
                     page.locator('[data-tab="maintenance-panel"]').click()
+                    self.assertTrue(page.locator("#youtube-import-button").is_visible())
                     page.locator('[data-maintenance-tab="model-maintenance"]').click()
                     page.locator('[data-service-id="openai"]').click()
                     self.assertEqual(page.locator("#model-service").input_value(), "openai")

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import webbrowser
 from datetime import datetime
@@ -17,7 +18,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .config import DEFAULT_SUMMARY_PROMPT, Settings, default_bilibili_cookies_file, effective_bilibili_cookies_file
+from .config import (
+    DEFAULT_SUMMARY_PROMPT,
+    Settings,
+    default_bilibili_cookies_file,
+    default_youtube_cookies_file,
+    effective_bilibili_cookies_file,
+    effective_youtube_cookies_file,
+)
 from .backup import backup_artifacts
 from .errors import EasySourceFlowError
 from .maintenance import maintenance_status
@@ -140,6 +148,9 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             if parsed.path == "/cookies/bilibili":
                 self._json(_bilibili_cookie_status(settings))
                 return
+            if parsed.path == "/cookies/youtube":
+                self._json(_youtube_cookie_status(settings))
+                return
             if parsed.path == "/model":
                 self._json(_model_status(settings))
                 return
@@ -229,6 +240,8 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 "/prompt",
                 "/bilibili/login/open",
                 "/cookies/bilibili/import",
+                "/youtube/login/open",
+                "/cookies/youtube/import",
             }:
                 self._json({"error": {"code": "not_found", "message": "Endpoint not found."}}, status=404)
                 return
@@ -283,6 +296,15 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             if parsed.path == "/cookies/bilibili/import":
                 try:
                     self._json(_import_bilibili_cookies(settings))
+                except EasySourceFlowError as exc:
+                    self._json({"error": exc.to_dict()}, status=400)
+                return
+            if parsed.path == "/youtube/login/open":
+                self._json(_open_youtube_login())
+                return
+            if parsed.path == "/cookies/youtube/import":
+                try:
+                    self._json(_import_youtube_cookies(settings))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
                 return
@@ -385,28 +407,59 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
 
 
 def _bilibili_cookie_status(settings: Settings) -> dict:
-    path_text = effective_bilibili_cookies_file(settings)
+    return _cookie_status(
+        "Bilibili",
+        effective_bilibili_cookies_file(settings),
+        default_bilibili_cookies_file(settings),
+        {"bilibili.com"},
+    )
+
+
+def _youtube_cookie_status(settings: Settings) -> dict:
+    result = _cookie_status(
+        "YouTube",
+        effective_youtube_cookies_file(settings),
+        default_youtube_cookies_file(settings),
+        {"youtube.com"},
+        auth_cookie_names={"LOGIN_INFO", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"},
+    )
+    result["extractor_args_configured"] = bool(settings.youtube_extractor_args.strip())
+    return result
+
+
+def _cookie_status(
+    label: str,
+    path_text: str,
+    default_path: Path,
+    allowed_domains: set[str],
+    auth_cookie_names: set[str] | None = None,
+) -> dict:
     result = {
         "configured": bool(path_text),
-        "path": path_text or str(default_bilibili_cookies_file(settings)),
+        "path": path_text or str(default_path),
         "exists": False,
         "size": 0,
+        "cookie_count": 0,
+        "authenticated": False,
         "updated_at": None,
         "ok": False,
-        "message": "Bilibili cookies file is not configured.",
+        "message": f"{label} cookies file is not configured.",
     }
     if not path_text:
         return result
     path = Path(path_text).expanduser()
     result["exists"] = path.exists()
     if not path.exists():
-        result["message"] = "Bilibili cookies file does not exist."
+        result["message"] = f"{label} cookies file does not exist."
         return result
     stat = path.stat()
     result["size"] = stat.st_size
     result["updated_at"] = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
-    result["ok"] = stat.st_size > 0
-    result["message"] = "Bilibili cookies file exists." if result["ok"] else "Bilibili cookies file is empty."
+    cookie_count, names = _cookie_file_summary(path, allowed_domains)
+    result["cookie_count"] = cookie_count
+    result["authenticated"] = bool(names.intersection(auth_cookie_names or set()))
+    result["ok"] = cookie_count > 0
+    result["message"] = f"{label} cookies file exists." if result["ok"] else f"{label} cookies file has no matching cookies."
     return result
 
 
@@ -733,62 +786,175 @@ def _open_bilibili_login() -> dict:
     return {
         "ok": bool(opened),
         "url": url,
-        "message": "Opened Bilibili login page. Scan the QR code in Chrome, then import cookies.",
+        "message": "Opened the Bilibili login page in the default browser. Sign in to Chrome before importing cookies.",
+    }
+
+
+def _open_youtube_login() -> dict:
+    url = "https://www.youtube.com/"
+    opened = webbrowser.open(url, new=2)
+    return {
+        "ok": bool(opened),
+        "url": url,
+        "message": "Opened YouTube in the default browser. Confirm Chrome is signed in before importing the login state.",
     }
 
 
 def _import_bilibili_cookies(settings: Settings) -> dict:
-    cookies_path = Path(settings.bilibili_cookies_file).expanduser() if settings.bilibili_cookies_file else default_bilibili_cookies_file(settings)
-    cookies_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        cookies_path.parent.chmod(0o700)
-    except OSError:
-        logger.debug("could not chmod bilibili cookies directory", exc_info=True)
-    ytdlp = _find_ytdlp(settings)
-    command = [
-        ytdlp,
-        "--cookies-from-browser",
-        "chrome",
-        "--cookies",
-        str(cookies_path),
-        "--skip-download",
-        "--simulate",
-        "https://www.bilibili.com/",
-    ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=90,
+    cookies_path = (
+        Path(settings.bilibili_cookies_file).expanduser()
+        if settings.bilibili_cookies_file
+        else default_bilibili_cookies_file(settings)
     )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip().splitlines()[-1:]
-        message = detail[0] if detail else "Could not import Bilibili cookies from Chrome."
-        raise EasySourceFlowError(
-            "bilibili_cookie_import_failed",
-            message,
-            [
-                "Open Chrome and scan the Bilibili login QR code first.",
-                "Close private browsing windows and retry.",
-                "If Chrome cookies are locked, export a Netscape cookies file manually.",
-            ],
-        )
-    if not cookies_path.exists() or cookies_path.stat().st_size <= 0:
-        raise EasySourceFlowError(
-            "bilibili_cookie_import_failed",
-            "yt-dlp finished but did not write a cookies file.",
-            ["Confirm Chrome is logged in to Bilibili, then retry the import."],
-        )
-    try:
-        cookies_path.chmod(0o600)
-    except OSError:
-        logger.debug("could not chmod bilibili cookies file", exc_info=True)
+    _import_browser_cookies(
+        settings,
+        cookies_path=cookies_path,
+        platform="Bilibili",
+        test_url="https://www.bilibili.com/",
+        allowed_domains={"bilibili.com"},
+        error_code="bilibili_cookie_import_failed",
+    )
     config_file = _write_env_values(_config_file_path(), {"EASYSOURCEFLOW_BILIBILI_COOKIES_FILE": str(cookies_path)})
     object.__setattr__(settings, "bilibili_cookies_file", str(cookies_path))
     logger.info("bilibili cookies imported path=%s config_file=%s", cookies_path, config_file)
     return {"ok": True, "config_file": str(config_file), "cookies": _bilibili_cookie_status(settings)}
+
+
+def _import_youtube_cookies(settings: Settings) -> dict:
+    cookies_path = (
+        Path(settings.youtube_cookies_file).expanduser()
+        if settings.youtube_cookies_file
+        else default_youtube_cookies_file(settings)
+    )
+    _import_browser_cookies(
+        settings,
+        cookies_path=cookies_path,
+        platform="YouTube",
+        test_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        allowed_domains={"youtube.com"},
+        error_code="youtube_cookie_import_failed",
+    )
+    config_file = _write_env_values(_config_file_path(), {"EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE": str(cookies_path)})
+    object.__setattr__(settings, "youtube_cookies_file", str(cookies_path))
+    logger.info("youtube cookies imported path=%s config_file=%s", cookies_path, config_file)
+    return {"ok": True, "config_file": str(config_file), "cookies": _youtube_cookie_status(settings)}
+
+
+def _import_browser_cookies(
+    settings: Settings,
+    *,
+    cookies_path: Path,
+    platform: str,
+    test_url: str,
+    allowed_domains: set[str],
+    error_code: str,
+) -> None:
+    cookies_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cookies_path.parent.chmod(0o700)
+    except OSError:
+        logger.debug("could not chmod cookies directory platform=%s", platform, exc_info=True)
+    ytdlp = _find_ytdlp(settings)
+    with tempfile.TemporaryDirectory(prefix=f"{platform.lower()}-cookies-", dir=str(cookies_path.parent)) as tmpdir:
+        raw_path = Path(tmpdir) / "browser-cookies.txt"
+        filtered_path = Path(tmpdir) / "filtered-cookies.txt"
+        command = [
+            ytdlp,
+            "--cookies-from-browser",
+            "chrome",
+            "--cookies",
+            str(raw_path),
+            "--skip-download",
+            "--simulate",
+            "--no-playlist",
+            test_url,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise EasySourceFlowError(
+                error_code,
+                f"Timed out while reading {platform} login state from Chrome.",
+                ["Keep Chrome installed and unlocked, then retry the import."],
+            ) from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip().splitlines()[-1:]
+            message = detail[0] if detail else f"Could not import {platform} cookies from Chrome."
+            raise EasySourceFlowError(
+                error_code,
+                message,
+                [
+                    f"Open Chrome and confirm the {platform} account is signed in.",
+                    "Close private browsing windows and retry.",
+                    "If Chrome cookies are locked, export a Netscape cookies file manually.",
+                ],
+            )
+        cookie_count = _filter_cookie_file(raw_path, filtered_path, allowed_domains)
+        if cookie_count <= 0:
+            raise EasySourceFlowError(
+                error_code,
+                f"Chrome did not provide any {platform} cookies.",
+                [f"Open {platform} in Chrome, sign in, and retry the import."],
+            )
+        filtered_path.replace(cookies_path)
+    try:
+        cookies_path.chmod(0o600)
+    except OSError:
+        logger.debug("could not chmod cookies file platform=%s", platform, exc_info=True)
+
+
+def _filter_cookie_file(source: Path, destination: Path, allowed_domains: set[str]) -> int:
+    if not source.exists():
+        return 0
+    allowed = {domain.lower().lstrip(".") for domain in allowed_domains}
+    rows = []
+    for raw in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = _cookie_fields(raw)
+        if not fields:
+            continue
+        domain = fields[0].lower().lstrip(".")
+        if any(domain == item or domain.endswith("." + item) for item in allowed):
+            rows.append(raw)
+    if not rows:
+        return 0
+    destination.write_text("# Netscape HTTP Cookie File\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    destination.chmod(0o600)
+    return len(rows)
+
+
+def _cookie_file_summary(path: Path, allowed_domains: set[str]) -> tuple[int, set[str]]:
+    if not path.exists():
+        return 0, set()
+    allowed = {domain.lower().lstrip(".") for domain in allowed_domains}
+    names = set()
+    count = 0
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = _cookie_fields(raw)
+        if not fields:
+            continue
+        domain = fields[0].lower().lstrip(".")
+        if not any(domain == item or domain.endswith("." + item) for item in allowed):
+            continue
+        count += 1
+        names.add(fields[5])
+    return count, names
+
+
+def _cookie_fields(raw: str) -> list[str] | None:
+    line = raw
+    if line.startswith("#HttpOnly_"):
+        line = line[len("#HttpOnly_") :]
+    elif not line or line.startswith("#"):
+        return None
+    fields = line.split("\t")
+    return fields if len(fields) >= 7 else None
 
 
 def _find_ytdlp(settings: Settings) -> str:

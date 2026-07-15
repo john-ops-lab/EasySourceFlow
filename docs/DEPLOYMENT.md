@@ -91,6 +91,7 @@ EASYSOURCEFLOW_PORT=8765
 EASYSOURCEFLOW_DATA_DIR=~/.local/share/easysourceflow
 EASYSOURCEFLOW_OUTPUT_DIR=~/.local/share/easysourceflow/output
 EASYSOURCEFLOW_BILIBILI_COOKIES_FILE=~/.local/share/easysourceflow/secrets/bilibili-cookies.txt
+EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE=~/.local/share/easysourceflow/secrets/youtube-cookies.txt
 EASYSOURCEFLOW_FFMPEG_PATH=ffmpeg
 EASYSOURCEFLOW_WHISPER_CLI_PATH=whisper-cli
 EASYSOURCEFLOW_WHISPER_MODEL_PATH=~/.local/share/easysourceflow/models/ggml-base.bin

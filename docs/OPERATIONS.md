@@ -26,7 +26,7 @@ Web 控制台：
 http://127.0.0.1:8765/
 ```
 
-控制台可以提交链接、提交本地文件、查看健康状态、查看 B 站 cookies 状态、查看模型/ASR 配置、测试模型连通性、查看最近任务、取消/重试任务、查看批量报告、筛选/全文搜索输出文件并打开输出 Markdown。
+控制台可以提交链接和本地文件，查看 B 站/YouTube 登录态，配置与测试模型，编辑通用总结提示词，检查 Agent/系统/ASR 状态，取消或重试任务，查看批量报告、结果、收藏和全文搜索。
 
 常用控制命令：
 
@@ -152,14 +152,25 @@ LaunchAgent 文件位于：
 
 处理：
 
-1. 确认 cookies 文件存在。
-2. 在 Web 控制台的“账号与模型”区域确认 cookies 文件路径、大小和修改时间。
+1. 在 Chrome 登录 B 站。
+2. 在 Web“维护 → 账号与授权”导入 Chrome 登录态并确认状态为“可用”。
 3. 降低批量处理频率。
-4. 重新导出 cookies 文件。
+4. 必要时重新导入或配置 Netscape cookies 文件。
 
 不要在日志或聊天中打印 cookies。
 
-### 4.5 字幕不可用或转写失败
+### 4.5 YouTube 登录、字幕或 PO Token 问题
+
+处理：
+
+1. 在 Chrome 中确认账号能正常打开目标视频。
+2. 在 Web“维护 → 账号与授权”导入 YouTube 登录态并确认状态为“已导入”。
+3. 更新 `yt-dlp` 后重试。EasySourceFlow 会区分 `youtube_auth_required`、`youtube_po_token_required` 和 `youtube_rate_limited`。
+4. 只有在错误明确要求 PO Token 时，才按照当前 [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) 配置受支持的 provider 或 `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS`。
+
+Cookie 和 PO Token 都属于登录凭据，不要写入 Git、聊天、日志或回归样例。EasySourceFlow 不绕过会员、年龄、地区或其他平台权限。
+
+### 4.6 字幕不可用或转写失败
 
 处理：
 
@@ -169,7 +180,7 @@ LaunchAgent 文件位于：
 4. 确认视频时长没有超过 `EASYSOURCEFLOW_MAX_TRANSCRIPTION_SECONDS`。
 5. 如果服务由 launchd 托管，重新运行 `scripts/easysourceflow install-launchd` 刷新运行副本和工具路径。
 
-### 4.6 微信浏览器兜底失败
+### 4.7 微信浏览器兜底失败
 
 处理：
 
@@ -180,16 +191,17 @@ LaunchAgent 文件位于：
 
 服务会复用同一个 Playwright/Chrome 浏览器实例，避免每篇微信文章都冷启动浏览器。
 
-### 4.9 B 站与 ASR 回归
+### 4.8 视频平台与 ASR 回归
 
 运行仓库内真实样例：
 
 ```bash
 scripts/easysourceflow bilibili-regression
 scripts/easysourceflow bilibili-regression --force-refresh
+scripts/easysourceflow youtube-regression --force-refresh
 ```
 
-第一条允许复用有效缓存，第二条会重新执行抓取、字幕/转写和总结。样例清单位于 `docs/bilibili_regression_samples.json`。样例依赖平台内容和网络，失败时先确认链接、cookies、字幕状态和模型额度是否变化。
+不带 `--force-refresh` 时允许复用有效缓存；带参数时会重新执行抓取、字幕/转写和总结。样例清单位于 `docs/bilibili_regression_samples.json` 和 `docs/youtube_regression_samples.json`。真实平台样例依赖网络、账号、字幕、平台规则和模型额度，不进入普通 CI。
 
 有人工参考文本时评估 ASR：
 
@@ -199,21 +211,21 @@ scripts/easysourceflow asr-eval reference.txt hypothesis.txt 600
 
 输出包含字符错误率、准确率、时间戳单调性和时长覆盖率，不会输出参考文本或转写正文。
 
-### 4.10 完成与失败通知
+### 4.9 完成与失败通知
 
 通过 `.env` 配置通知事件、Webhook 或本地命令，详见配置说明。通知只发送任务标识、状态、标题、错误摘要和输出路径，不发送原文、字幕、API key 或 cookies。通知失败只记录错误类型，不改变任务最终状态。
 
-### 4.7 模型配置检查
+### 4.10 模型配置检查
 
-Web 控制台会显示当前 provider、普通模型、强模型、DeepSeek base URL 和 API key 是否已配置。
+Web 控制台会显示当前 provider、Fast/Pro 模型、兼容接口地址和该 provider 的 API Key 是否已配置。
 
 Web 控制台也会显示当前 ASR 后端、转写时长上限、Whisper 模型路径是否存在，以及文档解析器能力。
 
-模型和 ASR 配置仍通过 `.env` 或 launchd runtime env 管理，Web 页面只做状态展示和连接测试，不写入 API key。
+模型 provider、Fast/Pro 模型和 API Key 可以在 Web 中保存并测试；ASR 配置仍通过 `.env` 或 launchd runtime env 管理。API Key 不会由状态接口返回。
 
-如果 DeepSeek 调用失败，服务会使用本地抽取式摘要兜底，但结果会明确写出 `local_extractive_fallback` 和失败原因；日志也会记录 DeepSeek 的错误类型。
+如果当前云端模型调用失败，服务会使用本地抽取式摘要兜底，但结果会明确写出 `local_extractive_fallback` 和失败原因；日志也会记录错误类型。
 
-### 4.8 本地文件输入
+### 4.11 本地文件输入
 
 当前支持：
 
@@ -331,10 +343,11 @@ daemon 通过 Python logging 写入 launchd 或脚本配置的日志文件。日
 - 运行 `scripts/easysourceflow backup`。
 - 用普通网页验证一次兼容同步接口。
 - 用 B 站链接验证 `submit_link` 和同一 `job_id` 的 `get_job` 异步流程。
+- 用 YouTube 真实样例验证登录态、平台字幕来源和核心要点时间轴。
 - 检查输出目录是否正常写入。
 
 ## 9. 当前不处理的问题
 
 - Obsidian 保存失败: 当前没有 Obsidian 写入工具。
-- YouTube PO Token 或 cookies: 当前不作为短期主线处理。
+- YouTube 平台规则变化: 依赖当前 `yt-dlp`、账号权限和必要时的 PO Token provider，不能保证所有视频长期可用。
 - 多用户权限: 当前是本机单用户服务。

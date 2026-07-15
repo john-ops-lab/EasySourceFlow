@@ -106,6 +106,17 @@ def effective_bilibili_cookies_file(settings: Settings) -> str:
     return str(default_path) if default_path.exists() else ""
 
 
+def default_youtube_cookies_file(settings: Settings) -> Path:
+    return settings.data_dir / "secrets" / "youtube-cookies.txt"
+
+
+def effective_youtube_cookies_file(settings: Settings) -> str:
+    if settings.youtube_cookies_file:
+        return settings.youtube_cookies_file
+    default_path = default_youtube_cookies_file(settings)
+    return str(default_path) if default_path.exists() else ""
+
+
 def load_settings() -> Settings:
     _load_env_file()
     data_dir = Path(

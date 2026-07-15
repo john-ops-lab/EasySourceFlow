@@ -58,8 +58,8 @@ The Web console reports component readiness separately from actual MCP activity.
 | --- | --- | --- |
 | `EASYSOURCEFLOW_YTDLP_PATH` | auto-detect | Optional path to `yt-dlp`. |
 | `EASYSOURCEFLOW_BILIBILI_COOKIES_FILE` | empty | Netscape cookies file for Bilibili. If empty, the service uses `$DATA_DIR/secrets/bilibili-cookies.txt` when present. |
-| `EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE` | empty | Optional YouTube cookies file. |
-| `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS` | empty | Optional extra yt-dlp extractor arguments. |
+| `EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE` | auto-detect | Netscape cookies file for YouTube. If empty, the service uses `$DATA_DIR/secrets/youtube-cookies.txt` when present. |
+| `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS` | empty | Optional value passed to yt-dlp `--extractor-args` for current YouTube client or PO Token requirements. |
 | `EASYSOURCEFLOW_FFMPEG_PATH` | `ffmpeg` | Path or command name for ffmpeg. |
 | `EASYSOURCEFLOW_WHISPER_CLI_PATH` | `whisper-cli` | Path or command name for whisper.cpp CLI. |
 | `EASYSOURCEFLOW_WHISPER_MODEL_PATH` | `$DATA_DIR/models/ggml-base.bin` | whisper.cpp model path. |
@@ -67,6 +67,10 @@ The Web console reports component readiness separately from actual MCP activity.
 | `EASYSOURCEFLOW_MLX_WHISPER_PATH` | `mlx_whisper` | Optional MLX Whisper command. |
 | `EASYSOURCEFLOW_FASTER_WHISPER_PATH` | `faster-whisper` | Optional faster-whisper command. |
 | `EASYSOURCEFLOW_MAX_TRANSCRIPTION_SECONDS` | `7200` | Maximum video duration for local ASR fallback. |
+
+The Web maintenance page can import Bilibili or YouTube login state from the local Chrome profile. Import first exports to a private temporary file, keeps only cookies belonging to the selected platform, and atomically writes a `0600` file under the data directory. The HTTP response and logs never include cookie values.
+
+YouTube selection order is: creator-provided Chinese subtitles, other creator-provided subtitles, original-language automatic captions, other automatic captions, then local ASR. English captions are accepted as source material; the configured summary model still produces Chinese Markdown. PO Token requirements vary by YouTube client and yt-dlp version, so EasySourceFlow does not embed a token generator. Follow the current [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) when the returned status is `youtube_po_token_required`.
 
 ## Browser Fallback
 

@@ -1381,6 +1381,19 @@ INDEX_HTML = """<!doctype html>
 
           <div class="row">
             <div class="row-head">
+              <span class="title">YouTube 登录态</span>
+              <span class="status" id="youtube-status-pill">checking</span>
+            </div>
+            <div class="meta" id="youtube-account-status">读取状态中</div>
+            <div class="actions">
+              <button class="secondary" id="youtube-open-login-button" type="button">打开 YouTube</button>
+              <button class="secondary" id="youtube-import-button" type="button">导入 Chrome 登录态</button>
+            </div>
+            <div class="status-line" id="youtube-action-status"></div>
+          </div>
+
+          <div class="row">
+            <div class="row-head">
               <span class="title">模型服务商</span>
               <span class="status" id="model-service-pill">checking</span>
             </div>
@@ -1584,33 +1597,36 @@ INDEX_HTML = """<!doctype html>
 
     function organizeMaintenancePanels() {
       const settingsPanel = $('settings-panel');
-      const settingsRows = Array.from(settingsPanel.querySelectorAll(':scope > .settings-grid > .row'));
       const account = $('account-maintenance');
       const model = $('model-maintenance');
       const system = $('system-maintenance');
-      if (settingsRows[0]) {
-        settingsRows[0].classList.add('settings-section');
-        account.appendChild(settingsRows[0]);
-      }
+      const bilibiliRow = $('bilibili-import-button')?.closest('.row');
+      const youtubeRow = $('youtube-import-button')?.closest('.row');
+      const modelProviderRow = $('model-service')?.closest('.row');
+      [bilibiliRow, youtubeRow].forEach((row) => {
+        if (!row) return;
+        row.classList.add('settings-section');
+        account.appendChild(row);
+      });
       const modelChoice = $('model-choice-panel');
       modelChoice.classList.remove('workspace-page');
       modelChoice.classList.add('embedded-panel');
       model.appendChild(modelChoice);
-      if (settingsRows[1]) {
-        settingsRows[1].classList.add('settings-section');
-        model.appendChild(settingsRows[1]);
+      if (modelProviderRow) {
+        modelProviderRow.classList.add('settings-section');
+        model.appendChild(modelProviderRow);
       }
       const serviceRow = $('model-service').closest('.control-row');
       if (serviceRow) serviceRow.classList.add('sr-only');
       const providerList = document.createElement('div');
       providerList.id = 'model-provider-list';
       providerList.className = 'model-provider-list';
-      settingsRows[1]?.insertBefore(providerList, settingsRows[1].querySelector('.control-row'));
+      modelProviderRow?.insertBefore(providerList, modelProviderRow.querySelector('.control-row'));
       const unsaved = document.createElement('div');
       unsaved.id = 'model-unsaved-notice';
       unsaved.className = 'unsaved-notice';
       unsaved.textContent = '有尚未保存的更改。自动刷新不会覆盖这些内容。';
-      settingsRows[1]?.appendChild(unsaved);
+      modelProviderRow?.appendChild(unsaved);
       $('config-save-button').textContent = '保存并测试';
       $('model-save-button').hidden = true;
 
@@ -2309,10 +2325,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadRuntimeStatus() {
-      const [cookies, model] = await Promise.all([getJson('/cookies/bilibili'), getJson('/model')]);
+      const [cookies, youtubeCookies, model] = await Promise.all([getJson('/cookies/bilibili'), getJson('/cookies/youtube'), getJson('/model')]);
       const asr = model.asr || {};
       const parsers = model.document_parsers || {};
-      renderSettingsPanel(cookies, model);
+      renderSettingsPanel(cookies, youtubeCookies, model);
       $('runtime-status').innerHTML = `
         <div class="row">
           <div class="row-head">
@@ -2321,6 +2337,14 @@ INDEX_HTML = """<!doctype html>
           </div>
           <div class="meta">${esc(bilibiliCookieMessage(cookies))}</div>
           <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(cookies.path || '未配置')} · ${cookies.size || 0} B · ${esc(cookies.updated_at || '-')}</div></details>
+        </div>
+        <div class="row">
+          <div class="row-head">
+            <span class="title">YouTube 账号</span>
+            <span class="status ${youtubeCookies.ok ? 'succeeded' : 'failed'}">${youtubeCookies.ok ? '已导入' : '需处理'}</span>
+          </div>
+          <div class="meta">${esc(youtubeCookieMessage(youtubeCookies))}</div>
+          <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(youtubeCookies.path || '未配置')} · ${youtubeCookies.cookie_count || 0} 条 · ${esc(youtubeCookies.updated_at || '-')}</div></details>
         </div>
         <div class="row">
           <div class="row-head">
@@ -2354,7 +2378,14 @@ INDEX_HTML = """<!doctype html>
       return '尚未导入 B站登录态。';
     }
 
-    function renderSettingsPanel(cookies, model) {
+    function youtubeCookieMessage(cookies) {
+      if (cookies.ok && cookies.authenticated) return '已检测到 YouTube 登录 Cookie；处理视频时仍会由 YouTube 验证账号和访问权限。';
+      if (cookies.ok) return '已导入 YouTube Cookie；如仍要求登录，请重新导入 Chrome 登录态。';
+      if (cookies.exists) return '登录态文件中没有可用的 YouTube Cookie，请重新导入。';
+      return '尚未导入 YouTube 登录态。';
+    }
+
+    function renderSettingsPanel(cookies, youtubeCookies, model) {
       state.model = model;
       state.modelServices = model.model_services || [];
       $('bilibili-status-pill').textContent = cookies.ok ? '可用' : '需处理';
@@ -2362,6 +2393,13 @@ INDEX_HTML = """<!doctype html>
       $('bilibili-account-status').innerHTML = `
         <div>${esc(bilibiliCookieMessage(cookies))}</div>
         <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(cookies.path || '')} · ${cookies.size || 0} B · ${esc(cookies.updated_at || '-')}</div></details>
+      `;
+      $('youtube-status-pill').textContent = youtubeCookies.ok ? '已导入' : '需处理';
+      $('youtube-status-pill').className = `status ${youtubeCookies.ok ? 'succeeded' : 'failed'}`;
+      $('youtube-account-status').innerHTML = `
+        <div>${esc(youtubeCookieMessage(youtubeCookies))}</div>
+        <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(youtubeCookies.path || '')} · ${youtubeCookies.cookie_count || 0} 条 · ${esc(youtubeCookies.updated_at || '-')}</div></details>
+        <div class="meta">PO Token 高级参数：${youtubeCookies.extractor_args_configured ? '已配置' : '未配置'}</div>
       `;
       const service = currentModelService(model);
       $('model-service-pill').textContent = service.label || model.provider || '-';
@@ -2567,6 +2605,33 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function openYoutubeLogin() {
+      $('youtube-action-status').textContent = '正在打开 YouTube';
+      $('youtube-open-login-button').disabled = true;
+      try {
+        const result = await postJson('/youtube/login/open', {});
+        $('youtube-action-status').textContent = result.ok ? '已打开 YouTube；确认登录后再点“导入 Chrome 登录态”。' : `请手动打开：${result.url}`;
+      } catch (error) {
+        $('youtube-action-status').textContent = `打开失败：${error.message}`;
+      } finally {
+        $('youtube-open-login-button').disabled = false;
+      }
+    }
+
+    async function importYoutubeCookies() {
+      $('youtube-action-status').textContent = '正在从 Chrome 安全导入 YouTube 登录态';
+      $('youtube-import-button').disabled = true;
+      try {
+        const result = await postJson('/cookies/youtube/import', {});
+        $('youtube-action-status').textContent = result.ok ? `导入成功：${result.cookies.cookie_count || 0} 条 YouTube Cookie` : '导入未完成';
+        await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
+      } catch (error) {
+        $('youtube-action-status').textContent = `导入失败：${error.message}`;
+      } finally {
+        $('youtube-import-button').disabled = false;
+      }
+    }
+
     async function fulltextSearch() {
       const query = $('fulltext-query').value.trim();
       if (!query) {
@@ -2679,6 +2744,8 @@ INDEX_HTML = """<!doctype html>
     $('model-save-button').addEventListener('click', saveModelChoice);
     $('bilibili-open-login-button').addEventListener('click', openBilibiliLogin);
     $('bilibili-import-button').addEventListener('click', importBilibiliCookies);
+    $('youtube-open-login-button').addEventListener('click', openYoutubeLogin);
+    $('youtube-import-button').addEventListener('click', importYoutubeCookies);
     $('model-service').addEventListener('change', () => selectModelService($('model-service').value));
     $('summary-prompt').addEventListener('input', () => {
       state.promptDirty = true;

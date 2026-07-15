@@ -156,7 +156,7 @@ class HttpAndMcpTests(unittest.TestCase):
                     api_server.shutdown()
                     api_server.server_close()
 
-    def test_http_api_updates_model_and_imports_bilibili_cookies(self):
+    def test_http_api_updates_model_and_imports_platform_cookies(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "runtime.env"
             settings = Settings(
@@ -298,7 +298,20 @@ class HttpAndMcpTests(unittest.TestCase):
                     def fake_run(command, **_kwargs):
                         cookies_path = Path(command[command.index("--cookies") + 1])
                         cookies_path.parent.mkdir(parents=True, exist_ok=True)
-                        cookies_path.write_text("# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tFAKE_COOKIE\ttest\n", encoding="utf-8")
+                        if "youtube.com" in command[-1]:
+                            cookies_path.write_text(
+                                "# Netscape HTTP Cookie File\n"
+                                "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tYOUTUBE_TEST_VALUE\n"
+                                ".example.com\tTRUE\t/\tFALSE\t0\tUNRELATED\tSHOULD_NOT_PERSIST\n",
+                                encoding="utf-8",
+                            )
+                        else:
+                            cookies_path.write_text(
+                                "# Netscape HTTP Cookie File\n"
+                                ".bilibili.com\tTRUE\t/\tFALSE\t0\tFAKE_COOKIE\ttest\n"
+                                ".example.com\tTRUE\t/\tFALSE\t0\tUNRELATED\tSHOULD_NOT_PERSIST\n",
+                                encoding="utf-8",
+                            )
                         return subprocess.CompletedProcess(command, 0, "", "")
 
                     with patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_run):
@@ -314,6 +327,28 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertTrue(imported["cookies"]["ok"])
                     self.assertIn("EASYSOURCEFLOW_BILIBILI_COOKIES_FILE=", config_file.read_text(encoding="utf-8"))
                     self.assertNotIn("FAKE_COOKIE", json.dumps(imported, ensure_ascii=False))
+                    bilibili_cookie_text = Path(settings.bilibili_cookies_file).read_text(encoding="utf-8")
+                    self.assertIn(".bilibili.com", bilibili_cookie_text)
+                    self.assertNotIn(".example.com", bilibili_cookie_text)
+
+                    with patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_run):
+                        youtube_request = Request(
+                            f"http://127.0.0.1:{api_server.server_port}/cookies/youtube/import",
+                            data=b"{}",
+                            headers={"content-type": "application/json"},
+                            method="POST",
+                        )
+                        with urlopen(youtube_request, timeout=10) as response:
+                            youtube_imported = json.loads(response.read().decode("utf-8"))
+                    self.assertTrue(youtube_imported["ok"])
+                    self.assertTrue(youtube_imported["cookies"]["ok"])
+                    self.assertTrue(youtube_imported["cookies"]["authenticated"])
+                    self.assertEqual(youtube_imported["cookies"]["cookie_count"], 1)
+                    self.assertIn("EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE=", config_file.read_text(encoding="utf-8"))
+                    self.assertNotIn("YOUTUBE_TEST_VALUE", json.dumps(youtube_imported, ensure_ascii=False))
+                    youtube_cookie_text = Path(settings.youtube_cookies_file).read_text(encoding="utf-8")
+                    self.assertIn(".youtube.com", youtube_cookie_text)
+                    self.assertNotIn(".example.com", youtube_cookie_text)
                 finally:
                     api_server.shutdown()
                     api_server.server_close()

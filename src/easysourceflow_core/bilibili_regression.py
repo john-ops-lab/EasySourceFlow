@@ -1,4 +1,4 @@
-"""Opt-in regression runner for public Bilibili samples."""
+"""Opt-in regression runner for public video-platform samples."""
 
 from __future__ import annotations
 
@@ -56,6 +56,24 @@ def _run_sample(sample: dict, manifest_dir: Path, base_url: str, timeout_seconds
     expected_origins = sample.get("expected_transcript_origins") or []
     if expected_origins:
         _check(checks, "transcript_origin", origin in expected_origins, f"actual={origin}")
+    expected_subtitle_statuses = sample.get("expected_subtitle_statuses") or []
+    subtitle_status = str(metadata.get("subtitle_status") or "")
+    if expected_subtitle_statuses:
+        _check(
+            checks,
+            "subtitle_status",
+            subtitle_status in expected_subtitle_statuses,
+            f"actual={subtitle_status}",
+        )
+    expected_subtitle_languages = sample.get("expected_subtitle_languages") or []
+    subtitle_language = str(metadata.get("subtitle_language") or "")
+    if expected_subtitle_languages:
+        _check(
+            checks,
+            "subtitle_language",
+            any(subtitle_language.lower().startswith(str(item).lower()) for item in expected_subtitle_languages),
+            f"actual={subtitle_language}",
+        )
     summary = str(result.get("summary_markdown") or "")
     if sample.get("expected_summary_language") == "zh":
         _check(checks, "chinese_summary", _chinese_ratio(summary) >= 0.05, "summary must contain meaningful Chinese text")
@@ -132,7 +150,7 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run opt-in EasySourceFlow regressions against public Bilibili videos.")
+    parser = argparse.ArgumentParser(description="Run opt-in EasySourceFlow regressions against public video samples.")
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--timeout", type=int, default=7200)

@@ -206,7 +206,7 @@
 行为：
 
 - GET `/health`。
-- 检查输出目录、DeepSeek、yt-dlp、ffmpeg、whisper、B 站 cookies、微信浏览器兜底等。
+- 检查输出目录、当前模型 API、yt-dlp、ffmpeg、whisper、B 站/YouTube cookies、微信浏览器兜底等。
 
 ### 2.11 `easysourceflow_cleanup`
 

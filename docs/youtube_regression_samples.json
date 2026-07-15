@@ -1,0 +1,13 @@
+{
+  "samples": [
+    {
+      "id": "ted-manual-chinese-subtitle",
+      "url": "https://www.youtube.com/watch?v=gN07gbipMoY",
+      "expected_transcript_origins": ["platform_subtitle"],
+      "expected_subtitle_statuses": ["youtube_manual_subtitle"],
+      "expected_subtitle_languages": ["zh"],
+      "expected_summary_language": "zh",
+      "minimum_core_points": 5
+    }
+  ]
+}

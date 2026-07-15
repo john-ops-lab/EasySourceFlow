@@ -66,7 +66,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 - 普通网页: 本地 HTTP 抓取、正文抽取、OpenGraph / JSON-LD / metadata 辅助。
 - 微信公众号: 专用 DOM 和脚本变量提取，支持懒加载图片和 Playwright / Chrome 兜底。
 - B 站: `yt-dlp` 元数据、平台字幕接口、cookies 文件、音频转写兜底。
-- YouTube: 代码保留实验路径，不作为当前阶段主要验收目标。
+- YouTube: `yt-dlp` 元数据、Chrome 登录态文件、人工/自动字幕优先级、本地 ASR 兜底和平台错误分类。
 
 ### 3.5 Transcription fallback
 

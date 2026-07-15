@@ -16,9 +16,9 @@ import http.cookiejar
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from easysourceflow_core.config import Settings, effective_bilibili_cookies_file
+from easysourceflow_core.config import Settings, effective_bilibili_cookies_file, effective_youtube_cookies_file
 from easysourceflow_core.asr_quality import describe_transcript_quality
-from easysourceflow_core.errors import dependency_missing, extraction_failed, need_cookies
+from easysourceflow_core.errors import dependency_missing, extraction_error, extraction_failed, need_cookies
 from easysourceflow_core.models import SourceDocument
 from easysourceflow_core.url_utils import detect_source_type, normalize_url
 
@@ -65,13 +65,11 @@ def extract_video_document(
     subtitle_rejections = ""
 
     _progress(progress_callback, "subtitle", 0.35)
-    subtitle_result = _extract_ytdlp_subtitle(ytdlp, canonical_url, source_type, settings)
+    subtitle_result = _extract_ytdlp_subtitle(ytdlp, canonical_url, source_type, settings, data)
     platform_transcript = subtitle_result.get("transcript") or None
     platform_subtitle_vtt = subtitle_result.get("subtitle_vtt", "")
     subtitle_status = subtitle_result.get("status", "unavailable")
-    if source_type == "youtube" and not platform_transcript and _metadata_advertises_subtitles(data):
-        subtitle_status = "youtube_po_token_required"
-    if platform_transcript and _transcript_matches_video(platform_transcript, data):
+    if platform_transcript and _platform_transcript_is_usable(platform_transcript, data):
         transcript = platform_transcript
         subtitle_vtt = platform_subtitle_vtt
         subtitle_source = subtitle_result.get("source", "yt_dlp_subtitle")
@@ -213,17 +211,22 @@ def _dump_metadata(ytdlp: str, url: str, source_type: str, settings: Settings) -
         "--skip-download",
         "--no-warnings",
         "--no-playlist",
-        "--user-agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "--add-header",
-        "Referer:https://www.bilibili.com/",
     ]
     bilibili_cookies_file = effective_bilibili_cookies_file(settings)
-    if source_type == "bilibili" and bilibili_cookies_file:
-        cookies_file = Path(bilibili_cookies_file).expanduser()
-        if not cookies_file.exists():
-            raise need_cookies(f"Configured Bilibili cookies file does not exist: {cookies_file}")
-        command.extend(["--cookies", str(cookies_file)])
+    if source_type == "bilibili":
+        command.extend(
+            [
+                "--user-agent",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                "--add-header",
+                "Referer:https://www.bilibili.com/",
+            ]
+        )
+        if bilibili_cookies_file:
+            cookies_file = Path(bilibili_cookies_file).expanduser()
+            if not cookies_file.exists():
+                raise need_cookies(f"Configured Bilibili cookies file does not exist: {cookies_file}")
+            command.extend(["--cookies", str(cookies_file)])
     _add_youtube_auth_args(command, source_type, settings)
     command.append(url)
 
@@ -242,8 +245,34 @@ def _dump_metadata(ytdlp: str, url: str, source_type: str, settings: Settings) -
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip().splitlines()[-1:]
         message = detail[0] if detail else "yt-dlp could not read video metadata."
-        if "HTTP Error 412" in message or "Precondition Failed" in message:
+        if source_type == "bilibili" and ("HTTP Error 412" in message or "Precondition Failed" in message):
             raise need_cookies("Bilibili rejected the metadata request with HTTP 412.")
+        if source_type == "youtube":
+            status = _youtube_failure_status(message)
+            if status == "youtube_auth_required":
+                raise extraction_error(
+                    status,
+                    message,
+                    [
+                        "Sign in to YouTube in Chrome and import the login state from Web maintenance.",
+                        "Retry after confirming the video is accessible in the same account.",
+                    ],
+                )
+            if status == "youtube_po_token_required":
+                raise extraction_error(
+                    status,
+                    message,
+                    [
+                        "Update yt-dlp and retry with the imported YouTube login state.",
+                        "If yt-dlp still requires a PO Token, configure a supported PO Token provider or EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS.",
+                    ],
+                )
+            if status == "youtube_rate_limited":
+                raise extraction_error(
+                    status,
+                    message,
+                    ["Wait before retrying and avoid submitting the same video repeatedly."],
+                )
         if "login" in message.lower() or "cookies" in message.lower():
             raise need_cookies(message)
         raise extraction_failed(message)
@@ -338,7 +367,8 @@ def _transcribe_video_audio(
             timeout=max(120, int(float(duration or 60) * 3)),
         )
         if download.returncode != 0:
-            return {"transcript": "", "status": "audio_download_failed"}
+            status = _youtube_failure_status(f"{download.stdout}\n{download.stderr}") if source_type == "youtube" else ""
+            return {"transcript": "", "status": status or "audio_download_failed"}
         wav_files = list(tmp.glob("audio*.wav"))
         if not wav_files:
             return {"transcript": "", "status": "audio_download_failed"}
@@ -348,7 +378,15 @@ def _transcribe_video_audio(
         return _transcribe_audio_file(wav_files[0], tmp, settings, duration, language_hint)
 
 
-def _extract_ytdlp_subtitle(ytdlp: str, url: str, source_type: str, settings: Settings) -> Dict[str, str]:
+def _extract_ytdlp_subtitle(
+    ytdlp: str,
+    url: str,
+    source_type: str,
+    settings: Settings,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    if source_type == "youtube":
+        return _extract_youtube_subtitle(ytdlp, url, settings, metadata or {})
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="subtitle-", dir=str(settings.data_dir)) as tmpdir:
         manual = _download_subtitle_once(
@@ -400,6 +438,131 @@ def _extract_ytdlp_subtitle(ytdlp: str, url: str, source_type: str, settings: Se
         if transcript:
             return {"transcript": transcript, "status": "auto_subtitle_fallback_language", "subtitle_vtt": _read_first_subtitle(candidates)}
     return {"transcript": "", "status": status or "subtitle_unavailable", "subtitle_vtt": ""}
+
+
+def _extract_youtube_subtitle(
+    ytdlp: str,
+    url: str,
+    settings: Settings,
+    metadata: Dict[str, Any],
+) -> Dict[str, str]:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    statuses: List[str] = []
+    attempts = [
+        (False, _youtube_subtitle_languages(metadata, auto=False), "youtube_manual", "youtube_manual_subtitle"),
+        (True, _youtube_subtitle_languages(metadata, auto=True), "youtube_auto", "youtube_auto_subtitle"),
+    ]
+    with tempfile.TemporaryDirectory(prefix="youtube-subtitle-", dir=str(settings.data_dir)) as tmpdir:
+        for auto, languages, output_name, source in attempts:
+            if not languages:
+                continue
+            status = _download_subtitle_once(
+                ytdlp=ytdlp,
+                url=url,
+                source_type="youtube",
+                settings=settings,
+                tmpdir=tmpdir,
+                auto=auto,
+                languages=",".join(languages),
+                output_name=output_name,
+            )
+            statuses.append(status)
+            result = _youtube_subtitle_result(Path(tmpdir), output_name, languages, source)
+            if result:
+                return result
+    return {
+        "transcript": "",
+        "status": _most_actionable_youtube_status(statuses),
+        "subtitle_vtt": "",
+        "source": "yt_dlp",
+        "language": "",
+    }
+
+
+def _youtube_subtitle_languages(metadata: Dict[str, Any], auto: bool) -> List[str]:
+    available = metadata.get("automatic_captions" if auto else "subtitles") or {}
+    keys = [str(key) for key in available.keys() if key and key != "live_chat"]
+    if not keys:
+        if _metadata_advertises_subtitles(metadata):
+            return []
+        return ["en-orig", "en", "zh-Hans", "zh-Hant", "zh"] if auto else ["zh-Hans", "zh-Hant", "zh", "en"]
+
+    video_language = str(metadata.get("language") or "").strip()
+    chinese = [key for key in keys if key.lower().startswith(("zh", "cmn", "yue"))]
+    original = [key for key in keys if key.lower().endswith("-orig")]
+    same_language = [
+        key for key in keys
+        if video_language and (key.lower() == video_language.lower() or key.lower().startswith(video_language.lower() + "-"))
+    ]
+    english = [key for key in keys if key.lower() in {"en", "en-orig"}]
+    if auto:
+        groups = [original, same_language, english, chinese, keys]
+        limit = 8
+    else:
+        groups = [chinese, same_language, english, original, keys]
+        limit = 16
+    ranked: List[str] = []
+    for group in groups:
+        for key in group:
+            if key not in ranked:
+                ranked.append(key)
+            if len(ranked) >= limit:
+                return ranked
+    return ranked
+
+
+def _youtube_subtitle_result(
+    directory: Path,
+    output_name: str,
+    languages: List[str],
+    source: str,
+) -> Optional[Dict[str, str]]:
+    candidates = [path for path in directory.glob(f"{output_name}.*") if path.suffix.lower() in {".vtt", ".srt"}]
+    ranked = sorted(candidates, key=lambda path: _youtube_subtitle_path_priority(path, output_name, languages))
+    for candidate in ranked:
+        raw = candidate.read_text(encoding="utf-8", errors="replace")
+        transcript = _parse_srt(raw) if candidate.suffix.lower() == ".srt" else _parse_vtt(raw)
+        if not transcript or _is_low_value_subtitle(transcript):
+            continue
+        language = _youtube_subtitle_language(candidate, output_name)
+        return {
+            "transcript": transcript,
+            "status": source,
+            "subtitle_vtt": _srt_to_vtt(raw) if candidate.suffix.lower() == ".srt" else raw.strip(),
+            "source": source,
+            "language": language,
+        }
+    return None
+
+
+def _youtube_subtitle_path_priority(path: Path, output_name: str, languages: List[str]) -> tuple[int, str]:
+    language = _youtube_subtitle_language(path, output_name)
+    try:
+        index = languages.index(language)
+    except ValueError:
+        index = len(languages)
+    return index, path.name
+
+
+def _youtube_subtitle_language(path: Path, output_name: str) -> str:
+    prefix = output_name + "."
+    name = path.name
+    if name.startswith(prefix):
+        return name[len(prefix) : -len(path.suffix)]
+    return ""
+
+
+def _most_actionable_youtube_status(statuses: List[str]) -> str:
+    for status in [
+        "youtube_auth_required",
+        "youtube_po_token_required",
+        "youtube_rate_limited",
+        "subtitle_download_failed",
+        "no_requested_language_subtitles",
+    ]:
+        if status in statuses:
+            return status
+    return next((status for status in statuses if status), "subtitle_unavailable")
 
 
 def _extract_bilibili_subtitle(
@@ -619,8 +782,9 @@ def _download_subtitle_once(
     tmpdir: str,
     auto: bool,
     languages: Optional[str] = None,
+    output_name: str = "subtitle",
 ) -> str:
-    output = Path(tmpdir) / "subtitle"
+    output = Path(tmpdir) / output_name
     command = [
         ytdlp,
         "--skip-download",
@@ -648,10 +812,12 @@ def _download_subtitle_once(
         timeout=max(60, int(settings.request_timeout_seconds) + 60),
     )
     combined = f"{completed.stdout}\n{completed.stderr}"
-    if "PO token was not provided" in combined or "po token" in combined.lower():
-        return "po_token_missing"
+    if source_type == "youtube":
+        failure = _youtube_failure_status(combined)
+        if failure:
+            return failure
     if completed.returncode != 0:
-        return "download_failed"
+        return "subtitle_download_failed" if source_type == "youtube" else "download_failed"
     if "There are no subtitles for the requested languages" in combined:
         return "no_requested_language_subtitles"
     return "downloaded"
@@ -684,12 +850,25 @@ def _read_first_subtitle(candidates: List[Path]) -> str:
 def _add_youtube_auth_args(command: List[str], source_type: str, settings: Settings) -> None:
     if source_type != "youtube":
         return
-    if settings.youtube_cookies_file:
-        cookies_file = Path(settings.youtube_cookies_file).expanduser()
-        if cookies_file.exists():
-            command.extend(["--cookies", str(cookies_file)])
+    youtube_cookies_file = effective_youtube_cookies_file(settings)
+    if youtube_cookies_file:
+        cookies_file = Path(youtube_cookies_file).expanduser()
+        if not cookies_file.exists():
+            raise need_cookies(f"Configured YouTube cookies file does not exist: {cookies_file}")
+        command.extend(["--cookies", str(cookies_file)])
     if settings.youtube_extractor_args:
         command.extend(["--extractor-args", settings.youtube_extractor_args])
+
+
+def _youtube_failure_status(output: str) -> str:
+    lowered = output.lower()
+    if "po token" in lowered or "proof of origin" in lowered:
+        return "youtube_po_token_required"
+    if "http error 429" in lowered or "too many requests" in lowered or "rate limit" in lowered:
+        return "youtube_rate_limited"
+    if "sign in to confirm" in lowered or "login required" in lowered or "use --cookies" in lowered:
+        return "youtube_auth_required"
+    return ""
 
 
 def _transcribe_audio_file(
@@ -830,6 +1009,16 @@ def _transcript_matches_video(transcript: str, metadata: Dict[str, Any]) -> bool
         return True
     matches = sum(1 for token in tokens if token in haystack.lower())
     return matches >= 1
+
+
+def _platform_transcript_is_usable(transcript: str, metadata: Dict[str, Any]) -> bool:
+    if _is_low_value_subtitle(transcript):
+        return False
+    duration = _metadata_duration_seconds(metadata)
+    coverage = _transcript_coverage_seconds(transcript)
+    if duration and duration >= 300 and coverage and coverage < min(180, duration * 0.15):
+        return False
+    return True
 
 
 def _metadata_duration_seconds(metadata: Dict[str, Any]) -> float:
@@ -1032,7 +1221,7 @@ def _metadata_advertises_subtitles(data: Dict[str, Any]) -> bool:
 def _combine_status(first: str, second: str) -> str:
     if first in {"manual_subtitle", "auto_subtitle", "bilibili_subtitle"}:
         return first
-    if first == "youtube_po_token_required":
+    if first.startswith("youtube_") and first not in {"youtube_manual_subtitle", "youtube_auto_subtitle"}:
         return f"{first};{second}" if second else first
     if second:
         return second

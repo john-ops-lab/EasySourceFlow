@@ -25,7 +25,11 @@ from easysourceflow_core.extractors.wechat import _extract_wechat_fields, _extra
 from easysourceflow_core.extractors.video import (
     _bilibili_wbi_query,
     _extract_bilibili_subtitle,
+    _extract_ytdlp_subtitle,
+    _platform_transcript_is_usable,
     _transcript_matches_video,
+    _youtube_failure_status,
+    _youtube_subtitle_languages,
     extract_video_document,
 )
 from easysourceflow_core.digest import _append_video_timeline, _build_summary_prompt, _ensure_required_sections
@@ -143,6 +147,8 @@ class CoreTests(unittest.TestCase):
                                 "id": "sample",
                                 "url": "https://www.bilibili.com/video/BV1example",
                                 "expected_transcript_origins": ["platform_subtitle"],
+                                "expected_subtitle_statuses": ["bilibili_subtitle"],
+                                "expected_subtitle_languages": ["zh"],
                                 "expected_summary_language": "zh",
                                 "minimum_core_points": 2,
                             }
@@ -161,7 +167,11 @@ class CoreTests(unittest.TestCase):
                     ),
                     "source": {
                         "source_type": "bilibili",
-                        "metadata": {"transcript_origin": "platform_subtitle"},
+                        "metadata": {
+                            "transcript_origin": "platform_subtitle",
+                            "subtitle_status": "bilibili_subtitle",
+                            "subtitle_language": "zh-CN",
+                        },
                     },
                 },
             }
@@ -198,6 +208,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn('id="retry-instruction"', page)
         self.assertIn("openResourcePackage", page)
         self.assertIn('id="summary-prompt"', page)
+        self.assertIn('id="youtube-import-button"', page)
         self.assertIn('data-maintenance-tab="agent-maintenance"', page)
         self.assertIn("支持来源：", page)
 
@@ -967,6 +978,102 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(document.metadata["transcript_origin_label"], "原始字幕")
             self.assertIn("mismatch", document.metadata["subtitle_rejections"])
             self.assertIn("黄帝内经", document.content_text)
+
+    def test_youtube_subtitle_priority_prefers_manual_chinese_and_original_auto(self):
+        metadata = {
+            "language": "en",
+            "subtitles": {"en": [{}], "zh-Hant": [{}], "fr": [{}]},
+            "automatic_captions": {"zh-Hans": [{}], "en": [{}], "en-orig": [{}], "fr": [{}]},
+        }
+
+        self.assertEqual(_youtube_subtitle_languages(metadata, auto=False)[:2], ["zh-Hant", "en"])
+        self.assertEqual(_youtube_subtitle_languages(metadata, auto=True)[:2], ["en-orig", "en"])
+
+    def test_youtube_auto_subtitle_records_origin_language(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            metadata = {
+                "language": "en",
+                "duration": 360,
+                "subtitles": {},
+                "automatic_captions": {"en-orig": [{}], "zh-Hans": [{}]},
+            }
+
+            def fake_run(command, **_kwargs):
+                output = Path(command[command.index("-o") + 1])
+                output.with_name(output.name + ".en-orig.vtt").write_text(
+                    "WEBVTT\n\n"
+                    "00:00:00.000 --> 00:03:10.000\n"
+                    "This talk explains how deliberate practice changes difficult decisions over time.\n",
+                    encoding="utf-8",
+                )
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            with patch("easysourceflow_core.extractors.video.subprocess.run", side_effect=fake_run):
+                result = _extract_ytdlp_subtitle(
+                    "/test/yt-dlp",
+                    "https://www.youtube.com/watch?v=example",
+                    "youtube",
+                    settings,
+                    metadata,
+                )
+
+            self.assertEqual(result["status"], "youtube_auto_subtitle")
+            self.assertEqual(result["source"], "youtube_auto_subtitle")
+            self.assertEqual(result["language"], "en-orig")
+            self.assertIn("deliberate practice", result["transcript"])
+
+    def test_youtube_platform_subtitle_does_not_require_title_token_match(self):
+        transcript = (
+            "[00:00-03:10] This talk explains deliberate practice and decision making.\n"
+            "[03:10-06:00] The speaker closes with a practical exercise for the audience."
+        )
+        metadata = {"title": "完全不同语言的标题", "duration": 360}
+
+        self.assertTrue(_platform_transcript_is_usable(transcript, metadata))
+        self.assertFalse(_transcript_matches_video(transcript, metadata))
+
+    def test_youtube_without_subtitles_falls_back_to_local_asr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            metadata = {
+                "title": "A public video without platform subtitles",
+                "uploader": "Example channel",
+                "duration": 120,
+                "extractor": "youtube",
+                "webpage_url": "https://www.youtube.com/watch?v=example",
+                "description": "A long enough description for the metadata fallback path.",
+                "subtitles": {},
+                "automatic_captions": {},
+            }
+            transcription = {
+                "transcript": "[00:00-00:08] 这是本地语音识别得到的第一段内容。\n[00:08-00:16] 这是第二段内容。",
+                "subtitle_vtt": "WEBVTT\n",
+                "status": "transcribed_whisper_cpp",
+                "source": "whisper_cpp",
+                "language": "auto",
+            }
+            with patch("easysourceflow_core.extractors.video._find_ytdlp", return_value="/test/yt-dlp"), patch(
+                "easysourceflow_core.extractors.video._dump_metadata", return_value=metadata
+            ), patch(
+                "easysourceflow_core.extractors.video._extract_ytdlp_subtitle",
+                return_value={"transcript": "", "status": "subtitle_unavailable", "subtitle_vtt": ""},
+            ), patch(
+                "easysourceflow_core.extractors.video._transcribe_video_audio", return_value=transcription
+            ) as transcribe:
+                document = extract_video_document("https://www.youtube.com/watch?v=example", settings)
+
+            transcribe.assert_called_once()
+            self.assertEqual(document.extraction_method, "yt_dlp_metadata_whisper_transcription")
+            self.assertEqual(document.metadata["transcript_origin"], "local_asr")
+            self.assertEqual(document.metadata["subtitle_status"], "transcribed_whisper_cpp")
+
+    def test_youtube_failure_statuses_are_distinct(self):
+        self.assertEqual(_youtube_failure_status("Sign in to confirm you’re not a bot. Use --cookies"), "youtube_auth_required")
+        self.assertEqual(_youtube_failure_status("PO Token was not provided"), "youtube_po_token_required")
+        self.assertEqual(_youtube_failure_status("PO Token missing; try cookies"), "youtube_po_token_required")
+        self.assertEqual(_youtube_failure_status("HTTP Error 429: Too Many Requests"), "youtube_rate_limited")
+        self.assertEqual(_youtube_failure_status("There are no subtitles"), "")
 
     def test_bilibili_wbi_query_adds_signature(self):
         keys = ("abcdefghijklmnopqrstuvwxyz123456", "123456abcdefghijklmnopqrstuvwxyz")

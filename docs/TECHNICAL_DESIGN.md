@@ -11,7 +11,7 @@
 - 视频提取: `yt-dlp`。
 - 音频处理: `ffmpeg`。
 - 转写: `whisper_cpp`，并保留 `mlx_whisper`、`faster_whisper` 配置。
-- 总结: DeepSeek Chat Completions API。
+- 总结: OpenAI-compatible Chat Completions API；Web 预置 DeepSeek、OpenAI、Qwen、Kimi、智谱和 OpenRouter。
 - 输出: 本地 Markdown 文件和视频资源包。
 - Web 控制台: 内置 HTML/CSS/JavaScript，挂载在 `GET /`。
 
@@ -64,6 +64,7 @@ EASYSOURCEFLOW_PORT=8765
 EASYSOURCEFLOW_DATA_DIR=~/.local/share/easysourceflow
 EASYSOURCEFLOW_OUTPUT_DIR=~/.local/share/easysourceflow/output
 EASYSOURCEFLOW_BILIBILI_COOKIES_FILE=~/.local/share/easysourceflow/secrets/bilibili-cookies.txt
+EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE=~/.local/share/easysourceflow/secrets/youtube-cookies.txt
 EASYSOURCEFLOW_FFMPEG_PATH=ffmpeg
 EASYSOURCEFLOW_WHISPER_CLI_PATH=whisper-cli
 EASYSOURCEFLOW_WHISPER_MODEL_PATH=~/.local/share/easysourceflow/models/ggml-base.bin
@@ -144,7 +145,7 @@ class SourceDocument:
 yt-dlp metadata
   -> platform subtitles
   -> transcript normalization
-  -> DeepSeek summary
+  -> configured model summary
   -> Markdown and resource package
 ```
 
@@ -168,7 +169,9 @@ yt-dlp audio
 
 ### 8.4 YouTube
 
-YouTube 路径保留在代码中，但当前阶段不继续扩展。遇到 PO Token、cookies 或字幕不可用问题时，记录状态并返回可读错误。
+YouTube 使用独立字幕选择流程：优先人工中文字幕，其次其他人工字幕；没有人工字幕时优先原语言自动字幕，再尝试其他自动字幕。只有平台字幕均不可用时才下载音频进入本地 ASR。
+
+Web 可以从本机 Chrome 导入登录态。导入过程只保留 `youtube.com` 域 Cookie，使用私有临时文件和原子替换写入数据目录。PO Token 不内置生成器；当 yt-dlp 明确要求时，通过当前受支持的 provider 或 `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS` 配置。
 
 ## 9. 总结策略
 
@@ -278,10 +281,11 @@ SQLite 表：
 5. 微信公众号提取和浏览器兜底。
 6. 模型 API 总结。
 7. B 站字幕和转写兜底。
-8. Markdown 输出和视频资源包。
-9. 批量链接。
-10. 清理工具。
-11. 健康检查。
+8. YouTube 登录态、字幕优先级和转写兜底。
+9. Markdown 输出和视频资源包。
+10. 批量链接。
+11. 清理工具。
+12. 健康检查。
 
 后续：
 
@@ -290,4 +294,4 @@ SQLite 表：
 3. B 站多 P 视频支持。
 4. 任务恢复后的严格输出幂等。
 5. Obsidian 入库。
-6. YouTube 深度适配。
+6. 持续跟进 YouTube 客户端和 PO Token 规则变化。
