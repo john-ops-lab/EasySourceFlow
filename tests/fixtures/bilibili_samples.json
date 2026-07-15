@@ -1,0 +1,22 @@
+[
+  {
+    "id": "nihaixia-subtitle",
+    "url": "https://www.bilibili.com/video/BV1mY411U7as",
+    "expected_path": "chinese_subtitle_preferred",
+    "checks": [
+      "no_unnecessary_asr",
+      "core_timeline_uses_summary_points",
+      "full_timeline_link_exists"
+    ]
+  },
+  {
+    "id": "english-to-chinese",
+    "url": "",
+    "expected_path": "english_subtitle_or_speech_to_chinese_summary",
+    "checks": [
+      "chinese_summary",
+      "chinese_core_timeline",
+      "full_timeline_link_exists"
+    ]
+  }
+]

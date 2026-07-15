@@ -1,0 +1,662 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${PYTHON_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
+HOST="${EASYSOURCEFLOW_HOST:-127.0.0.1}"
+PORT="${EASYSOURCEFLOW_PORT:-8765}"
+BASE_URL="http://${HOST}:${PORT}"
+PID_DIR="${ROOT_DIR}/var/run"
+LOG_DIR="${ROOT_DIR}/var/log"
+PID_FILE="${PID_DIR}/easysourceflowd.pid"
+LOG_FILE="${LOG_DIR}/easysourceflowd.log"
+PLIST_LABEL="${EASYSOURCEFLOW_LAUNCHD_LABEL:-app.easysourceflow.daemon}"
+PLIST_FILE="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
+MAINTENANCE_LABEL="${EASYSOURCEFLOW_MAINTENANCE_LABEL:-app.easysourceflow.maintenance}"
+MAINTENANCE_PLIST_FILE="${HOME}/Library/LaunchAgents/${MAINTENANCE_LABEL}.plist"
+RUNTIME_DIR="${EASYSOURCEFLOW_LAUNCHD_RUNTIME_DIR:-${HOME}/.local/share/easysourceflow/launchd}"
+RUNTIME_SRC="${RUNTIME_DIR}/src"
+RUNTIME_VENV="${RUNTIME_DIR}/.venv"
+RUNTIME_PYTHON="${RUNTIME_VENV}/bin/python"
+RUNTIME_ENV="${RUNTIME_DIR}/runtime.env"
+RUNTIME_DATA="${RUNTIME_DIR}/data"
+RUNTIME_OUTPUT="${RUNTIME_DIR}/output"
+RUNTIME_LOG_DIR="${RUNTIME_DIR}/log"
+RUNTIME_LOG_FILE="${RUNTIME_LOG_DIR}/easysourceflowd.log"
+
+usage() {
+  cat <<EOF
+Usage: scripts/easysourceflow <command>
+
+Commands:
+  start      Start easysourceflowd in the background
+  stop       Stop easysourceflowd
+  restart    Stop then start easysourceflowd
+  status     Show process and URL status
+  health     Run dependency health check
+  open       Open the Web console in the default browser
+  logs       Follow the service log
+  log-status Show log file size and location
+  rotate-logs Rotate the service log if it is larger than the threshold
+  regression Run a local smoke regression
+  bilibili-regression [manifest] [--force-refresh]  Run opt-in real Bilibili regressions
+  asr-eval <reference> <hypothesis> [duration]  Compare ASR output with a reference
+  install-skill <agent-workspace>  Install the official Agent skill
+  cleanup-preview  Preview old artifact cleanup
+  cleanup-apply    Remove old artifacts after review
+  backup     Back up SQLite database and output directory
+  maintenance-run  Run backup and log rotation once
+  install-maintenance-launchd    Install daily backup/log rotation
+  uninstall-maintenance-launchd  Remove daily backup/log rotation
+  maintenance-status             Show maintenance LaunchAgent status
+  install-launchd    Install and start the user LaunchAgent
+  uninstall-launchd  Stop and remove the user LaunchAgent
+  launchd-status     Show LaunchAgent status
+  sync-runtime        Refresh launchd runtime copy without loading launchd
+EOF
+}
+
+ensure_dirs() {
+  mkdir -p "${PID_DIR}" "${LOG_DIR}"
+}
+
+pid_from_file() {
+  if [[ -f "${PID_FILE}" ]]; then
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
+      printf '%s\n' "${pid}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+pid_from_port() {
+  lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
+is_our_pid() {
+  local pid="$1"
+  local command
+  command="$(ps -p "${pid}" -o command= 2>/dev/null || true)"
+  [[ "${command}" == *"easysourceflow_core.daemon"* || "${command}" == *"easysourceflowd"* ]]
+}
+
+current_pid() {
+  if pid_from_file; then
+    return 0
+  fi
+  local pid
+  pid="$(pid_from_port || true)"
+  if [[ -n "${pid}" ]] && is_our_pid "${pid}"; then
+    printf '%s\n' "${pid}"
+    return 0
+  fi
+  return 1
+}
+
+active_log_file() {
+  if [[ -f "${PLIST_FILE}" ]]; then
+    printf '%s\n' "${RUNTIME_LOG_FILE}"
+  else
+    printf '%s\n' "${LOG_FILE}"
+  fi
+}
+
+wait_for_http() {
+  local attempts=40
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -fsS "${BASE_URL}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+start_service() {
+  ensure_dirs
+  if current_pid >/dev/null; then
+    printf 'EasySourceFlow is already running at %s\n' "${BASE_URL}"
+    status_service
+    return 0
+  fi
+
+  local port_pid
+  port_pid="$(pid_from_port || true)"
+  if [[ -n "${port_pid}" ]]; then
+    printf 'Port %s is already in use by PID %s. Stop that process or change EASYSOURCEFLOW_PORT.\n' "${PORT}" "${port_pid}" >&2
+    return 1
+  fi
+
+  cd "${ROOT_DIR}"
+  nohup env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.daemon \
+    >>"${LOG_FILE}" 2>&1 &
+  local pid="$!"
+  printf '%s\n' "${pid}" >"${PID_FILE}"
+
+  if wait_for_http; then
+    printf 'Started EasySourceFlow at %s\n' "${BASE_URL}"
+    printf 'PID: %s\n' "${pid}"
+    printf 'Log: %s\n' "${LOG_FILE}"
+  else
+    printf 'Started PID %s, but health check did not respond yet. Check %s\n' "${pid}" "${LOG_FILE}" >&2
+    return 1
+  fi
+}
+
+stop_service() {
+  local pid
+  if ! pid="$(current_pid)"; then
+    rm -f "${PID_FILE}"
+    printf 'EasySourceFlow is not running.\n'
+    return 0
+  fi
+
+  if ! is_our_pid "${pid}"; then
+    printf 'Refusing to stop PID %s because it does not look like EasySourceFlow.\n' "${pid}" >&2
+    return 1
+  fi
+
+  kill "${pid}" 2>/dev/null || true
+  local i
+  for ((i = 1; i <= 30; i++)); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      rm -f "${PID_FILE}"
+      printf 'Stopped EasySourceFlow.\n'
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  kill -9 "${pid}" 2>/dev/null || true
+  rm -f "${PID_FILE}"
+  printf 'Stopped EasySourceFlow with force kill.\n'
+}
+
+status_service() {
+  local pid
+  if pid="$(current_pid)"; then
+    printf 'Status: running\n'
+    printf 'PID: %s\n' "${pid}"
+    printf 'URL: %s\n' "${BASE_URL}"
+    printf 'Log: %s\n' "$(active_log_file)"
+  else
+    printf 'Status: stopped\n'
+    printf 'URL: %s\n' "${BASE_URL}"
+  fi
+}
+
+health_service() {
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.health
+}
+
+open_console() {
+  if ! current_pid >/dev/null; then
+    start_service
+  fi
+  open "${BASE_URL}/"
+  printf 'Opened %s/\n' "${BASE_URL}"
+}
+
+tail_logs() {
+  ensure_dirs
+  touch "${LOG_FILE}"
+  tail -f "${LOG_FILE}"
+}
+
+log_status() {
+  ensure_dirs
+  touch "${LOG_FILE}"
+  printf 'Log: %s\n' "${LOG_FILE}"
+  wc -c "${LOG_FILE}" | awk '{printf "Bytes: %s\n", $1}'
+  printf 'Recent lines:\n'
+  tail -n 20 "${LOG_FILE}"
+}
+
+cleanup_preview() {
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.cleanup --days "${1:-14}"
+}
+
+cleanup_apply() {
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.cleanup --days "${1:-14}" --apply
+}
+
+backup_service() {
+  cd "${ROOT_DIR}"
+  if [[ -f "${PLIST_FILE}" ]]; then
+    if [[ ! -f "${RUNTIME_SRC}/easysourceflow_core/backup.py" ]]; then
+      sync_runtime
+    fi
+    env \
+      PYTHONPATH="${RUNTIME_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
+      EASYSOURCEFLOW_CONFIG_FILE="${RUNTIME_ENV}" \
+      EASYSOURCEFLOW_DATA_DIR="${RUNTIME_DATA}" \
+      EASYSOURCEFLOW_DATABASE="${RUNTIME_DATA}/easysourceflow.sqlite3" \
+      EASYSOURCEFLOW_OUTPUT_DIR="${RUNTIME_OUTPUT}" \
+      "${RUNTIME_PYTHON}" -m easysourceflow_core.backup
+  else
+    env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.backup
+  fi
+}
+
+sync_runtime() {
+  ensure_dirs
+  mkdir -p "${RUNTIME_SRC}" "${RUNTIME_DATA}" "${RUNTIME_OUTPUT}" "${RUNTIME_DIR}"
+  rsync -a --delete "${ROOT_DIR}/src/" "${RUNTIME_SRC}/"
+  if [[ -f "${ROOT_DIR}/.env" ]]; then
+    cp "${ROOT_DIR}/.env" "${RUNTIME_ENV}"
+  else
+    : >"${RUNTIME_ENV}"
+  fi
+  chmod 600 "${RUNTIME_ENV}"
+  if [[ ! -x "${RUNTIME_PYTHON}" ]]; then
+    "${PYTHON_BIN}" -m venv "${RUNTIME_VENV}"
+  fi
+  "${RUNTIME_PYTHON}" -m pip install --quiet --upgrade pip
+  "${RUNTIME_PYTHON}" -m pip install --quiet "beautifulsoup4>=4.12.0" "pypdf>=5.0.0" "yt-dlp>=2025.10.14" playwright
+}
+
+plist_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+env_file_value() {
+  local key="$1"
+  local line
+  if [[ ! -f "${ROOT_DIR}/.env" ]]; then
+    return 1
+  fi
+  line="$(grep -E "^${key}=" "${ROOT_DIR}/.env" | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${line#*=}"
+}
+
+resolve_tool_path() {
+  local fallback="$1"
+  local configured="${2:-}"
+  local candidate="${configured:-${fallback}}"
+  if [[ "${candidate}" == */* ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  command -v "${candidate}" 2>/dev/null || printf '%s\n' "${candidate}"
+}
+
+write_launchd_plist() {
+  ensure_dirs
+  sync_runtime
+  mkdir -p "${HOME}/Library/LaunchAgents" "${RUNTIME_LOG_DIR}"
+  local pythonpath launchd_path ffmpeg_path whisper_cli_path runtime_python_program runtime_site_packages
+  runtime_python_program="$("${RUNTIME_PYTHON}" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+  runtime_site_packages="$("${RUNTIME_PYTHON}" -c 'import site; print(site.getsitepackages()[0])')"
+  pythonpath="${RUNTIME_SRC}:${runtime_site_packages}${PYTHONPATH:+:${PYTHONPATH}}"
+  launchd_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  ffmpeg_path="$(resolve_tool_path ffmpeg "$(env_file_value EASYSOURCEFLOW_FFMPEG_PATH || true)")"
+  whisper_cli_path="$(resolve_tool_path whisper-cli "$(env_file_value EASYSOURCEFLOW_WHISPER_CLI_PATH || true)")"
+  cat >"${PLIST_FILE}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(plist_escape "${PLIST_LABEL}")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(plist_escape "${runtime_python_program}")</string>
+    <string>-m</string>
+    <string>easysourceflow_core.daemon</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(plist_escape "${RUNTIME_LOG_FILE}")</string>
+  <key>StandardErrorPath</key>
+  <string>$(plist_escape "${RUNTIME_LOG_FILE}")</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(plist_escape "${launchd_path}")</string>
+    <key>PYTHONPATH</key>
+    <string>$(plist_escape "${pythonpath}")</string>
+    <key>EASYSOURCEFLOW_CONFIG_FILE</key>
+    <string>$(plist_escape "${RUNTIME_ENV}")</string>
+    <key>EASYSOURCEFLOW_PROJECT_ROOT</key>
+    <string>$(plist_escape "${ROOT_DIR}")</string>
+    <key>EASYSOURCEFLOW_DATA_DIR</key>
+    <string>$(plist_escape "${RUNTIME_DATA}")</string>
+    <key>EASYSOURCEFLOW_DATABASE</key>
+    <string>$(plist_escape "${RUNTIME_DATA}/easysourceflow.sqlite3")</string>
+    <key>EASYSOURCEFLOW_OUTPUT_DIR</key>
+    <string>$(plist_escape "${RUNTIME_OUTPUT}")</string>
+    <key>EASYSOURCEFLOW_YTDLP_PATH</key>
+    <string>$(plist_escape "${RUNTIME_VENV}/bin/yt-dlp")</string>
+    <key>EASYSOURCEFLOW_FFMPEG_PATH</key>
+    <string>$(plist_escape "${ffmpeg_path}")</string>
+    <key>EASYSOURCEFLOW_WHISPER_CLI_PATH</key>
+    <string>$(plist_escape "${whisper_cli_path}")</string>
+  </dict>
+</dict>
+</plist>
+EOF
+  plutil -lint "${PLIST_FILE}" >/dev/null
+}
+
+launchctl_domain() {
+  printf 'gui/%s\n' "$(id -u)"
+}
+
+launchd_loaded() {
+  launchctl print "$(launchctl_domain)/${PLIST_LABEL}" >/dev/null 2>&1
+}
+
+maintenance_loaded() {
+  launchctl print "$(launchctl_domain)/${MAINTENANCE_LABEL}" >/dev/null 2>&1
+}
+
+launchd_bootout() {
+  if launchd_loaded; then
+    launchctl bootout "$(launchctl_domain)" "${PLIST_FILE}" >/dev/null 2>&1 || true
+  fi
+}
+
+maintenance_bootout() {
+  if maintenance_loaded; then
+    launchctl bootout "$(launchctl_domain)" "${MAINTENANCE_PLIST_FILE}" >/dev/null 2>&1 || true
+  fi
+}
+
+install_launchd() {
+  ensure_dirs
+  local pid
+  if pid="$(current_pid)"; then
+    if is_our_pid "${pid}"; then
+      printf 'Stopping manually running EasySourceFlow before enabling launchd.\n'
+      stop_service
+    else
+      printf 'Port %s is already in use by PID %s. Refusing to install launchd start.\n' "${PORT}" "${pid}" >&2
+      return 1
+    fi
+  fi
+  write_launchd_plist
+  launchd_bootout
+  launchctl bootstrap "$(launchctl_domain)" "${PLIST_FILE}"
+  launchctl enable "$(launchctl_domain)/${PLIST_LABEL}" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$(launchctl_domain)/${PLIST_LABEL}"
+  if wait_for_http; then
+    printf 'Installed LaunchAgent: %s\n' "${PLIST_FILE}"
+    printf 'Started EasySourceFlow at %s\n' "${BASE_URL}"
+  else
+    printf 'LaunchAgent installed, but service did not pass health check yet. Check %s\n' "${LOG_FILE}" >&2
+    return 1
+  fi
+}
+
+uninstall_launchd() {
+  launchd_bootout
+  rm -f "${PLIST_FILE}"
+  rm -f "${PID_FILE}"
+  printf 'Removed LaunchAgent: %s\n' "${PLIST_FILE}"
+}
+
+launchd_status() {
+  printf 'Label: %s\n' "${PLIST_LABEL}"
+  printf 'Plist: %s\n' "${PLIST_FILE}"
+  printf 'Runtime: %s\n' "${RUNTIME_DIR}"
+  if [[ -f "${PLIST_FILE}" ]]; then
+    printf 'Plist status: installed\n'
+  else
+    printf 'Plist status: missing\n'
+  fi
+  if launchd_loaded; then
+    printf 'launchd status: loaded\n'
+    launchctl print "$(launchctl_domain)/${PLIST_LABEL}" | sed -n '1,45p'
+  else
+    printf 'launchd status: not loaded\n'
+  fi
+  status_service
+}
+
+rotate_logs() {
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.maintenance \
+    --log "${LOG_FILE}" \
+    --max-log-bytes "${1:-5000000}" \
+    --keep-logs "${2:-5}" \
+    --rotate-only
+}
+
+run_regression() {
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.regression
+}
+
+run_bilibili_regression() {
+  local manifest="${ROOT_DIR}/docs/bilibili_regression_samples.json"
+  if [[ "${1:-}" != "" && "${1:-}" != --* ]]; then
+    manifest="$1"
+    shift
+  fi
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.bilibili_regression \
+    "${manifest}" --base-url "${BASE_URL}" --timeout "${EASYSOURCEFLOW_REGRESSION_TIMEOUT:-7200}" "$@"
+}
+
+run_asr_eval() {
+  local reference="${1:-}"
+  local hypothesis="${2:-}"
+  local duration="${3:-}"
+  if [[ -z "${reference}" || -z "${hypothesis}" ]]; then
+    printf 'Usage: scripts/easysourceflow asr-eval <reference> <hypothesis> [duration]\n' >&2
+    return 2
+  fi
+  local args=("${reference}" "${hypothesis}")
+  if [[ -n "${duration}" ]]; then
+    args+=(--duration "${duration}")
+  fi
+  cd "${ROOT_DIR}"
+  env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.asr_quality "${args[@]}"
+}
+
+install_agent_skill() {
+  local workspace="${1:-${EASYSOURCEFLOW_AGENT_WORKSPACE:-}}"
+  if [[ -z "${workspace}" ]]; then
+    printf 'Usage: scripts/easysourceflow install-skill <agent-workspace>\n' >&2
+    return 2
+  fi
+  if [[ ! -f "${ROOT_DIR}/skills/easysourceflow/SKILL.md" ]]; then
+    printf 'Official skill is missing from %s\n' "${ROOT_DIR}/skills/easysourceflow" >&2
+    return 1
+  fi
+  local target="${workspace%/}/skills/easysourceflow"
+  mkdir -p "${target}"
+  rsync -a --delete "${ROOT_DIR}/skills/easysourceflow/" "${target}/"
+  printf 'Installed EasySourceFlow skill: %s\n' "${target}"
+}
+
+maintenance_run() {
+  cd "${ROOT_DIR}"
+  if [[ -f "${PLIST_FILE}" ]]; then
+    if [[ ! -f "${RUNTIME_SRC}/easysourceflow_core/maintenance.py" ]]; then
+      sync_runtime
+    fi
+    env \
+      PYTHONPATH="${RUNTIME_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
+      EASYSOURCEFLOW_CONFIG_FILE="${RUNTIME_ENV}" \
+      EASYSOURCEFLOW_DATA_DIR="${RUNTIME_DATA}" \
+      EASYSOURCEFLOW_DATABASE="${RUNTIME_DATA}/easysourceflow.sqlite3" \
+      EASYSOURCEFLOW_OUTPUT_DIR="${RUNTIME_OUTPUT}" \
+      "${RUNTIME_PYTHON}" -m easysourceflow_core.maintenance --log "${LOG_FILE}"
+  else
+    env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.maintenance --log "${LOG_FILE}"
+  fi
+}
+
+write_maintenance_plist() {
+  ensure_dirs
+  sync_runtime
+  mkdir -p "${HOME}/Library/LaunchAgents"
+  cat >"${MAINTENANCE_PLIST_FILE}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(plist_escape "${MAINTENANCE_LABEL}")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(plist_escape "${ROOT_DIR}/scripts/easysourceflow")</string>
+    <string>maintenance-run</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$(plist_escape "${LOG_DIR}/maintenance.log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(plist_escape "${LOG_DIR}/maintenance.log")</string>
+</dict>
+</plist>
+EOF
+  plutil -lint "${MAINTENANCE_PLIST_FILE}" >/dev/null
+}
+
+install_maintenance_launchd() {
+  write_maintenance_plist
+  maintenance_bootout
+  launchctl bootstrap "$(launchctl_domain)" "${MAINTENANCE_PLIST_FILE}"
+  launchctl enable "$(launchctl_domain)/${MAINTENANCE_LABEL}" >/dev/null 2>&1 || true
+  printf 'Installed maintenance LaunchAgent: %s\n' "${MAINTENANCE_PLIST_FILE}"
+  printf 'Schedule: daily 03:15 local time\n'
+}
+
+uninstall_maintenance_launchd() {
+  maintenance_bootout
+  rm -f "${MAINTENANCE_PLIST_FILE}"
+  printf 'Removed maintenance LaunchAgent: %s\n' "${MAINTENANCE_PLIST_FILE}"
+}
+
+maintenance_status() {
+  printf 'Label: %s\n' "${MAINTENANCE_LABEL}"
+  printf 'Plist: %s\n' "${MAINTENANCE_PLIST_FILE}"
+  if [[ -f "${MAINTENANCE_PLIST_FILE}" ]]; then
+    printf 'Plist status: installed\n'
+  else
+    printf 'Plist status: missing\n'
+  fi
+  if maintenance_loaded; then
+    printf 'launchd status: loaded\n'
+    launchctl print "$(launchctl_domain)/${MAINTENANCE_LABEL}" | sed -n '1,45p'
+  else
+    printf 'launchd status: not loaded\n'
+  fi
+}
+
+command="${1:-}"
+case "${command}" in
+  start)
+    start_service
+    ;;
+  stop)
+    stop_service
+    ;;
+  restart)
+    stop_service
+    start_service
+    ;;
+  status)
+    status_service
+    ;;
+  health)
+    health_service
+    ;;
+  open)
+    open_console
+    ;;
+  logs)
+    tail_logs
+    ;;
+  log-status)
+    log_status
+    ;;
+  rotate-logs)
+    rotate_logs "${2:-5000000}" "${3:-5}"
+    ;;
+  regression)
+    run_regression
+    ;;
+  bilibili-regression)
+    shift
+    run_bilibili_regression "$@"
+    ;;
+  asr-eval)
+    run_asr_eval "${2:-}" "${3:-}" "${4:-}"
+    ;;
+  install-skill)
+    install_agent_skill "${2:-}"
+    ;;
+  cleanup-preview)
+    cleanup_preview "${2:-14}"
+    ;;
+  cleanup-apply)
+    cleanup_apply "${2:-14}"
+    ;;
+  backup)
+    backup_service
+    ;;
+  maintenance-run)
+    maintenance_run
+    ;;
+  install-maintenance-launchd)
+    install_maintenance_launchd
+    ;;
+  uninstall-maintenance-launchd)
+    uninstall_maintenance_launchd
+    ;;
+  maintenance-status)
+    maintenance_status
+    ;;
+  sync-runtime)
+    sync_runtime
+    printf 'Synced launchd runtime: %s\n' "${RUNTIME_DIR}"
+    ;;
+  install-launchd)
+    install_launchd
+    ;;
+  uninstall-launchd)
+    uninstall_launchd
+    ;;
+  launchd-status)
+    launchd_status
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    printf 'Unknown command: %s\n\n' "${command}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

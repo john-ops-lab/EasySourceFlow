@@ -1,0 +1,25 @@
+{
+  "samples": [
+    {
+      "id": "nihaixia-platform-subtitle",
+      "url": "https://www.bilibili.com/video/BV1mY411U7as",
+      "expected_transcript_origins": ["platform_subtitle"],
+      "expected_summary_language": "zh",
+      "minimum_core_points": 3
+    },
+    {
+      "id": "english-subtitle-to-chinese",
+      "url": "https://www.bilibili.com/video/BV19CoBYjEFg",
+      "expected_transcript_origins": ["platform_subtitle", "local_asr"],
+      "expected_summary_language": "zh",
+      "minimum_core_points": 3
+    },
+    {
+      "id": "no-platform-subtitle-asr",
+      "url": "https://www.bilibili.com/video/BV1uRHQeCEyf/",
+      "expected_transcript_origins": ["local_asr"],
+      "expected_summary_language": "zh",
+      "minimum_core_points": 3
+    }
+  ]
+}

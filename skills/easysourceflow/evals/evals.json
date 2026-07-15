@@ -1,0 +1,40 @@
+{
+  "skill_name": "easysourceflow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我总结这个 B 站视频：https://www.bilibili.com/video/BVEXAMPLE",
+      "expected_output": "The agent submits the video with Pro quality, polls the job, and returns EasySourceFlow's final Markdown without rewriting it.",
+      "files": [],
+      "expectations": [
+        "Uses easysourceflow_submit_link rather than independently downloading or transcribing the video",
+        "Uses summary_quality pro",
+        "Polls easysourceflow_get_job until a terminal state",
+        "Returns the final summary Markdown unchanged"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "https://example.com/article 帮我整理一下这篇文章",
+      "expected_output": "The agent submits the webpage as a durable job, waits for it with the same job ID, and directly delivers the final Markdown.",
+      "files": [],
+      "expectations": [
+        "Uses easysourceflow_submit_link and retains the returned job ID",
+        "Uses easysourceflow_get_job with wait_seconds 45 until a terminal state",
+        "Does not perform a second summary",
+        "Preserves links, labels, and output path from the result"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "收藏",
+      "expected_output": "After a prior EasySourceFlow result, the agent favorites that result and confirms without resending it.",
+      "files": [],
+      "expectations": [
+        "Uses easysourceflow_favorite_result with the latest known result identifier",
+        "Confirms the favorite operation concisely",
+        "Does not resend or rewrite the summary"
+      ]
+    }
+  ]
+}

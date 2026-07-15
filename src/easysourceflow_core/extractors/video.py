@@ -1,0 +1,1044 @@
+"""Video metadata extraction through yt-dlp."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import shutil
+import subprocess
+import hashlib
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+import http.cookiejar
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+from easysourceflow_core.config import Settings, effective_bilibili_cookies_file
+from easysourceflow_core.asr_quality import describe_transcript_quality
+from easysourceflow_core.errors import dependency_missing, extraction_failed, need_cookies
+from easysourceflow_core.models import SourceDocument
+from easysourceflow_core.url_utils import detect_source_type, normalize_url
+
+
+ProgressCallback = Callable[[str, float], None]
+logger = logging.getLogger(__name__)
+
+_BILIBILI_MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+    36, 20, 34, 44, 52,
+]
+
+_BILIBILI_DM_WBI_PARAMS = {
+    "dm_img_list": "[]",
+    "dm_img_str": "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
+    "dm_cover_img_str": "QU5HTEUgKE5WSURJQSwgTlZJRElBIEdlRm9yY2UgUlRYIDQwNjAgTGFwdG9wIEdQVSAoMHgwMDAwMjhFMCkgRGlyZWN0M0QxMSB2c181XzAgcHNfNV8wLCBEM0QxMSlHb29nbGUgSW5jLiAoTlZJRElBKQ",
+    "dm_img_inter": '{"ds":[],"wh":[5231,6067,75],"of":[475,950,475]}',
+}
+
+
+def extract_video_document(
+    url: str,
+    settings: Settings,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> SourceDocument:
+    canonical_url = normalize_url(url, settings.allow_local_urls)
+    ytdlp = _find_ytdlp(settings)
+    source_type = detect_source_type(canonical_url)
+    _progress(progress_callback, "metadata", 0.20)
+    data = _dump_metadata(ytdlp, canonical_url, source_type, settings)
+
+    title = str(data.get("title") or canonical_url)
+    uploader = data.get("uploader") or data.get("channel")
+    content_text = _metadata_to_text(data, canonical_url)
+    base_content_text = content_text
+    extraction_method = "yt_dlp_metadata"
+    transcript: Optional[str] = None
+    subtitle_status = "not_attempted"
+    subtitle_vtt = ""
+    subtitle_source = ""
+    subtitle_language = ""
+    subtitle_rejections = ""
+
+    _progress(progress_callback, "subtitle", 0.35)
+    subtitle_result = _extract_ytdlp_subtitle(ytdlp, canonical_url, source_type, settings)
+    platform_transcript = subtitle_result.get("transcript") or None
+    platform_subtitle_vtt = subtitle_result.get("subtitle_vtt", "")
+    subtitle_status = subtitle_result.get("status", "unavailable")
+    if source_type == "youtube" and not platform_transcript and _metadata_advertises_subtitles(data):
+        subtitle_status = "youtube_po_token_required"
+    if platform_transcript and _transcript_matches_video(platform_transcript, data):
+        transcript = platform_transcript
+        subtitle_vtt = platform_subtitle_vtt
+        subtitle_source = subtitle_result.get("source", "yt_dlp_subtitle")
+        subtitle_language = subtitle_result.get("language", "")
+        content_text = _content_with_transcript(base_content_text, transcript)
+        extraction_method = "yt_dlp_metadata_platform_subtitle"
+
+    if source_type == "bilibili":
+        bilibili_subtitle = _extract_bilibili_subtitle(canonical_url, settings, data)
+        if bilibili_subtitle.get("transcript"):
+            bilibili_transcript = bilibili_subtitle["transcript"]
+            if _transcript_matches_video(bilibili_transcript, data):
+                transcript = bilibili_transcript
+                subtitle_vtt = bilibili_subtitle.get("subtitle_vtt", "")
+                subtitle_status = "bilibili_subtitle"
+                subtitle_source = bilibili_subtitle.get("source", "")
+                subtitle_language = bilibili_subtitle.get("language", "")
+                subtitle_rejections = bilibili_subtitle.get("rejections", "")
+                content_text = _content_with_transcript(base_content_text, transcript)
+                extraction_method = "yt_dlp_metadata_bilibili_subtitle"
+            else:
+                logger.warning(
+                    "bilibili subtitle rejected as mismatched title=%s status=%s",
+                    title,
+                    bilibili_subtitle.get("status"),
+                )
+                if not transcript:
+                    subtitle_status = "bilibili_subtitle_mismatch"
+                    subtitle_source = bilibili_subtitle.get("source", "")
+                    subtitle_language = bilibili_subtitle.get("language", "")
+                    subtitle_rejections = bilibili_subtitle.get("rejections", "")
+        elif not transcript and bilibili_subtitle.get("status") not in {"", "subtitle_unavailable"}:
+            subtitle_status = bilibili_subtitle.get("status", "subtitle_unavailable")
+            subtitle_source = bilibili_subtitle.get("source", "")
+            subtitle_language = bilibili_subtitle.get("language", "")
+            subtitle_rejections = bilibili_subtitle.get("rejections", "")
+
+    if not transcript:
+        _progress(progress_callback, "audio_download", 0.45)
+        transcription = _transcribe_video_audio(
+            ytdlp,
+            canonical_url,
+            source_type,
+            settings,
+            data,
+            progress_callback,
+        )
+        transcript = transcription.get("transcript") or None
+        if transcript:
+            subtitle_vtt = transcription.get("subtitle_vtt", "")
+            content_text = _content_with_transcript(base_content_text, transcript)
+            extraction_method = "yt_dlp_metadata_whisper_transcription"
+            subtitle_status = transcription.get("status", "transcribed")
+            subtitle_source = transcription.get("source", "audio_transcription")
+            subtitle_language = transcription.get("language", "")
+        else:
+            subtitle_status = _combine_status(subtitle_status, transcription.get("status", "transcription_unavailable"))
+
+    if len(content_text) < 40:
+        raise extraction_failed("yt-dlp returned too little public metadata to summarize this video.")
+
+    transcript_with_timestamps = transcript or ""
+    plain_transcript = _plain_transcript(transcript_with_timestamps)
+    transcript_origin = _transcript_origin(extraction_method, subtitle_status, bool(transcript))
+    transcript_quality = describe_transcript_quality(
+        transcript_with_timestamps,
+        _optional_float(data.get("duration")),
+        transcript_origin["origin"],
+    )
+    return SourceDocument(
+        source_url=url,
+        canonical_url=canonical_url,
+        source_type=source_type,
+        title=title,
+        author=str(uploader) if uploader else None,
+        published_at=str(data.get("upload_date") or "") or None,
+        language=str(data.get("language") or "") or None,
+        content_text=content_text,
+        content_markdown=content_text,
+        metadata={
+            "duration": str(data.get("duration") or ""),
+            "extractor": str(data.get("extractor") or ""),
+            "webpage_url": str(data.get("webpage_url") or canonical_url),
+            "transcript_has_timestamps": str(bool(transcript and "[" in transcript[:40])),
+            "subtitle_status": subtitle_status,
+            "subtitle_source": subtitle_source,
+            "subtitle_language": subtitle_language,
+            "subtitle_rejections": subtitle_rejections,
+            "transcript_origin": transcript_origin["origin"],
+            "transcript_origin_label": transcript_origin["label"],
+            "transcript_quality": transcript_quality,
+            "subtitle_vtt": subtitle_vtt,
+            "transcript_text": plain_transcript,
+            "transcript_with_timestamps": transcript_with_timestamps,
+            "raw_metadata": _compact_raw_metadata(data),
+        },
+        extraction_method=extraction_method,
+    )
+
+
+def _transcript_origin(extraction_method: str, subtitle_status: str, has_transcript: bool) -> Dict[str, str]:
+    if not has_transcript:
+        return {"origin": "none", "label": "未获取可用字幕或转写"}
+    if extraction_method == "yt_dlp_metadata_whisper_transcription" or subtitle_status.startswith("transcribed"):
+        return {"origin": "local_asr", "label": "本地 ASR 转写"}
+    if extraction_method in {"yt_dlp_metadata_platform_subtitle", "yt_dlp_metadata_bilibili_subtitle"}:
+        return {"origin": "platform_subtitle", "label": "原始字幕"}
+    return {"origin": "unknown", "label": "未知字幕来源"}
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_ytdlp(settings: Settings) -> str:
+    candidates = []
+    if settings.ytdlp_path:
+        candidates.append(settings.ytdlp_path)
+    which = shutil.which("yt-dlp")
+    if which:
+        candidates.append(which)
+
+    project_root = Path(__file__).resolve().parents[3]
+    candidates.append(str(project_root / ".venv" / "bin" / "yt-dlp"))
+
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    raise dependency_missing("yt-dlp is required for Bilibili and YouTube links.")
+
+
+def _dump_metadata(ytdlp: str, url: str, source_type: str, settings: Settings) -> Dict[str, Any]:
+    command = [
+        ytdlp,
+        "--dump-single-json",
+        "--skip-download",
+        "--no-warnings",
+        "--no-playlist",
+        "--user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "--add-header",
+        "Referer:https://www.bilibili.com/",
+    ]
+    bilibili_cookies_file = effective_bilibili_cookies_file(settings)
+    if source_type == "bilibili" and bilibili_cookies_file:
+        cookies_file = Path(bilibili_cookies_file).expanduser()
+        if not cookies_file.exists():
+            raise need_cookies(f"Configured Bilibili cookies file does not exist: {cookies_file}")
+        command.extend(["--cookies", str(cookies_file)])
+    _add_youtube_auth_args(command, source_type, settings)
+    command.append(url)
+
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=max(30, int(settings.request_timeout_seconds) + 30),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise extraction_failed("yt-dlp timed out while reading video metadata.") from exc
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip().splitlines()[-1:]
+        message = detail[0] if detail else "yt-dlp could not read video metadata."
+        if "HTTP Error 412" in message or "Precondition Failed" in message:
+            raise need_cookies("Bilibili rejected the metadata request with HTTP 412.")
+        if "login" in message.lower() or "cookies" in message.lower():
+            raise need_cookies(message)
+        raise extraction_failed(message)
+
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise extraction_failed("yt-dlp returned invalid metadata JSON.") from exc
+
+
+def _metadata_to_text(data: Dict[str, Any], canonical_url: str) -> str:
+    lines: List[str] = []
+    lines.append(f"Title: {data.get('title') or canonical_url}")
+    if data.get("uploader") or data.get("channel"):
+        lines.append(f"Author: {data.get('uploader') or data.get('channel')}")
+    if data.get("duration_string"):
+        lines.append(f"Duration: {data.get('duration_string')}")
+    elif data.get("duration"):
+        lines.append(f"Duration seconds: {data.get('duration')}")
+    if data.get("description"):
+        lines.append(f"Description: {data.get('description')}")
+    if data.get("tags"):
+        tags = ", ".join(str(tag) for tag in data.get("tags")[:20])
+        lines.append(f"Tags: {tags}")
+
+    subtitles = data.get("subtitles") or {}
+    automatic_captions = data.get("automatic_captions") or {}
+    if subtitles:
+        lines.append(f"Available subtitles: {', '.join(sorted(subtitles.keys()))}")
+    if automatic_captions:
+        lines.append(f"Available automatic captions: {', '.join(sorted(automatic_captions.keys())[:10])}")
+    if not subtitles and not automatic_captions:
+        lines.append("Transcript: No public subtitles were found by yt-dlp in this M2-lite extractor.")
+
+    return "\n\n".join(line for line in lines if line)
+
+
+def _content_with_transcript(content_text: str, transcript: str) -> str:
+    cleaned = content_text.replace(
+        "\n\nTranscript: No public subtitles were found by yt-dlp in this M2-lite extractor.",
+        "",
+    )
+    return f"{cleaned}\n\nTranscript:\n\n{transcript}"
+
+
+def _transcribe_video_audio(
+    ytdlp: str,
+    url: str,
+    source_type: str,
+    settings: Settings,
+    metadata: Dict[str, Any],
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Dict[str, str]:
+    duration = metadata.get("duration")
+    if duration and float(duration) > settings.max_transcription_seconds:
+        return {"transcript": "", "status": "transcription_skipped_too_long"}
+    ffmpeg = shutil.which(settings.ffmpeg_path) or settings.ffmpeg_path
+    if not ffmpeg:
+        return {"transcript": "", "status": "dependency_missing_ffmpeg"}
+
+    downloads_dir = settings.data_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="transcribe-", dir=str(downloads_dir)) as tmpdir:
+        tmp = Path(tmpdir)
+        audio_prefix = tmp / "audio"
+        command = [
+            ytdlp,
+            "--no-warnings",
+            "--no-playlist",
+            "-f",
+            "ba/best",
+            "-x",
+            "--audio-format",
+            "wav",
+            "--ffmpeg-location",
+            str(Path(ffmpeg).parent) if Path(ffmpeg).exists() else ffmpeg,
+            "-o",
+            str(audio_prefix) + ".%(ext)s",
+        ]
+        bilibili_cookies_file = effective_bilibili_cookies_file(settings)
+        if source_type == "bilibili" and bilibili_cookies_file:
+            command.extend(["--cookies", str(Path(bilibili_cookies_file).expanduser())])
+        _add_youtube_auth_args(command, source_type, settings)
+        command.append(url)
+
+        download = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=max(120, int(float(duration or 60) * 3)),
+        )
+        if download.returncode != 0:
+            return {"transcript": "", "status": "audio_download_failed"}
+        wav_files = list(tmp.glob("audio*.wav"))
+        if not wav_files:
+            return {"transcript": "", "status": "audio_download_failed"}
+
+        _progress(progress_callback, "transcribing", 0.55)
+        language_hint = "zh" if source_type == "bilibili" else "auto"
+        return _transcribe_audio_file(wav_files[0], tmp, settings, duration, language_hint)
+
+
+def _extract_ytdlp_subtitle(ytdlp: str, url: str, source_type: str, settings: Settings) -> Dict[str, str]:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="subtitle-", dir=str(settings.data_dir)) as tmpdir:
+        manual = _download_subtitle_once(
+            ytdlp=ytdlp,
+            url=url,
+            source_type=source_type,
+            settings=settings,
+            tmpdir=tmpdir,
+            auto=False,
+        )
+        status = manual
+        candidates = sorted(Path(tmpdir).glob("subtitle*"), key=_subtitle_priority)
+        transcript = _first_subtitle_transcript(candidates)
+        if transcript:
+            return {"transcript": transcript, "status": "manual_subtitle", "subtitle_vtt": _read_first_subtitle(candidates)}
+
+        auto = _download_subtitle_once(
+            ytdlp=ytdlp,
+            url=url,
+            source_type=source_type,
+            settings=settings,
+            tmpdir=tmpdir,
+            auto=True,
+            languages="zh,en",
+        )
+        if "po_token_missing" in {manual, auto}:
+            status = "po_token_missing"
+        else:
+            status = auto
+        candidates = sorted(Path(tmpdir).glob("subtitle*"), key=_subtitle_priority)
+        transcript = _first_subtitle_transcript(candidates)
+        if transcript:
+            return {"transcript": transcript, "status": "auto_subtitle", "subtitle_vtt": _read_first_subtitle(candidates)}
+        fallback = _download_subtitle_once(
+            ytdlp=ytdlp,
+            url=url,
+            source_type=source_type,
+            settings=settings,
+            tmpdir=tmpdir,
+            auto=True,
+            languages="all,-live_chat",
+        )
+        if "po_token_missing" in {status, fallback}:
+            status = "po_token_missing"
+        else:
+            status = fallback
+        candidates = sorted(Path(tmpdir).glob("subtitle*"), key=_subtitle_priority)
+        transcript = _first_subtitle_transcript(candidates)
+        if transcript:
+            return {"transcript": transcript, "status": "auto_subtitle_fallback_language", "subtitle_vtt": _read_first_subtitle(candidates)}
+    return {"transcript": "", "status": status or "subtitle_unavailable", "subtitle_vtt": ""}
+
+
+def _extract_bilibili_subtitle(
+    url: str,
+    settings: Settings,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    bvid = _extract_bvid(url)
+    if not bvid:
+        return {"transcript": "", "subtitle_vtt": "", "status": "subtitle_unavailable"}
+    opener = _build_bilibili_opener(settings)
+    wbi_keys = _bilibili_wbi_keys(opener)
+    view_sources = []
+    if wbi_keys:
+        view_sources.append(
+            _bilibili_wbi_url("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid}, wbi_keys)
+        )
+    view_sources.append(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")
+
+    view: Dict[str, Any] = {}
+    for view_url in view_sources:
+        view = _bilibili_json(opener, view_url)
+        if not view.get("__fetch_error") and view.get("data"):
+            break
+    if view.get("__fetch_error") or not view.get("data"):
+        return {"transcript": "", "subtitle_vtt": "", "status": "bilibili_view_api_failed"}
+    view_data = view.get("data") or {}
+    aid = view_data.get("aid")
+    pages = view_data.get("pages") or []
+    page_index = _bilibili_page_index(url)
+    page = pages[min(page_index, len(pages) - 1)] if pages else {}
+    cid = page.get("cid")
+    if not aid or not cid:
+        return {"transcript": "", "subtitle_vtt": "", "status": "subtitle_unavailable"}
+
+    seen_urls = set()
+    saw_mismatch = False
+    saw_low_value = False
+    saw_player_error = False
+    subtitle_api_failed = False
+    rejections: List[str] = []
+    player_sources = []
+    if wbi_keys:
+        player_sources.append(
+            (
+                "bilibili_wbi_player_v2",
+                _bilibili_wbi_url(
+                    "https://api.bilibili.com/x/player/wbi/v2",
+                    {"bvid": bvid, "cid": cid, **_BILIBILI_DM_WBI_PARAMS},
+                    wbi_keys,
+                ),
+            )
+        )
+    player_sources.append(("bilibili_player_v2", f"https://api.bilibili.com/x/player/v2?aid={aid}&cid={cid}"))
+
+    for source, player_url in player_sources:
+        for attempt in range(3):
+            player = _bilibili_json(opener, player_url)
+            if player.get("__fetch_error"):
+                saw_player_error = True
+                if attempt < 2:
+                    time.sleep(0.35)
+                continue
+
+            subtitle_items = (((player.get("data") or {}).get("subtitle") or {}).get("subtitles") or [])
+            if not subtitle_items:
+                break
+            for item in subtitle_items:
+                subtitle_url = item.get("subtitle_url")
+                if not subtitle_url:
+                    continue
+                if subtitle_url.startswith("//"):
+                    subtitle_url = "https:" + subtitle_url
+                if subtitle_url in seen_urls:
+                    continue
+                seen_urls.add(subtitle_url)
+
+                language = str(item.get("lan_doc") or item.get("lan") or "")
+                subtitle_payload = _bilibili_json(opener, subtitle_url)
+                if subtitle_payload.get("__fetch_error"):
+                    subtitle_api_failed = True
+                    rejections.append(f"{source}:{language or 'unknown'}:api_failed")
+                    continue
+                candidate = _bilibili_subtitle_payload_to_result(subtitle_payload)
+                candidate["source"] = source
+                candidate["language"] = language
+                candidate["rejections"] = ";".join(rejections)
+                transcript = candidate.get("transcript", "")
+                if not transcript or _is_low_value_subtitle(transcript):
+                    saw_low_value = True
+                    rejections.append(f"{source}:{language or 'unknown'}:low_value")
+                    continue
+                if metadata is not None and not _transcript_matches_video(transcript, metadata):
+                    saw_mismatch = True
+                    rejections.append(f"{source}:{language or 'unknown'}:mismatch")
+                    continue
+                candidate["rejections"] = ";".join(rejections)
+                return candidate
+
+            if attempt < 2:
+                time.sleep(0.35)
+
+    source_text = ",".join(source for source, _ in player_sources)
+    rejection_text = ";".join(rejections)
+    if saw_mismatch:
+        status = "bilibili_subtitle_mismatch"
+    elif saw_low_value:
+        status = "bilibili_subtitle_low_value"
+    elif subtitle_api_failed:
+        status = "bilibili_subtitle_api_failed"
+    elif saw_player_error:
+        status = "bilibili_player_api_failed"
+    else:
+        status = "subtitle_unavailable"
+    return {"transcript": "", "subtitle_vtt": "", "status": status, "source": source_text, "rejections": rejection_text}
+
+
+def _bilibili_wbi_keys(opener: urllib.request.OpenerDirector) -> Optional[tuple[str, str]]:
+    nav = _bilibili_json(opener, "https://api.bilibili.com/x/web-interface/nav")
+    if nav.get("__fetch_error"):
+        return None
+    wbi_img = ((nav.get("data") or {}).get("wbi_img") or {})
+    img_key = Path(urllib.parse.urlparse(str(wbi_img.get("img_url") or "")).path).stem
+    sub_key = Path(urllib.parse.urlparse(str(wbi_img.get("sub_url") or "")).path).stem
+    if len(img_key + sub_key) < max(_BILIBILI_MIXIN_KEY_ENC_TAB) + 1:
+        return None
+    return img_key, sub_key
+
+
+def _bilibili_wbi_url(endpoint: str, params: Dict[str, Any], keys: tuple[str, str]) -> str:
+    return endpoint + "?" + _bilibili_wbi_query(params, keys)
+
+
+def _bilibili_wbi_query(params: Dict[str, Any], keys: tuple[str, str]) -> str:
+    img_key, sub_key = keys
+    raw_key = img_key + sub_key
+    mixin_key = "".join(raw_key[index] for index in _BILIBILI_MIXIN_KEY_ENC_TAB)[:32]
+    signed_params = {key: str(value) for key, value in params.items()}
+    signed_params["wts"] = str(round(time.time()))
+    filtered_params = {}
+    for key, value in sorted(signed_params.items()):
+        filtered_params[key] = re.sub(r"[!'()*]", "", value)
+    query = urllib.parse.urlencode(filtered_params)
+    filtered_params["w_rid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
+    return urllib.parse.urlencode(filtered_params)
+
+
+def _bilibili_page_index(url: str) -> int:
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query)
+    try:
+        return max(0, int((query.get("p") or ["1"])[0]) - 1)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bilibili_subtitle_payload_to_result(subtitle_payload: Dict[str, Any]) -> Dict[str, str]:
+    body = subtitle_payload.get("body") or []
+    lines = []
+    vtt_segments = []
+    for entry in body:
+        content = str(entry.get("content", "")).strip()
+        if not content:
+            continue
+        start = _format_seconds(entry.get("from"))
+        end = _format_seconds(entry.get("to"))
+        prefix = f"[{start}-{end}] " if start and end else ""
+        lines.append(prefix + content)
+        if start and end:
+            vtt_segments.append((entry.get("from"), entry.get("to"), content))
+    transcript = "\n".join(line for line in lines if line)
+    return {
+        "transcript": transcript,
+        "subtitle_vtt": _segments_to_vtt(vtt_segments),
+        "status": "bilibili_subtitle",
+    }
+
+
+def _extract_bvid(url: str) -> Optional[str]:
+    match = re.search(r"/video/(BV[A-Za-z0-9]+)", url)
+    return match.group(1) if match else None
+
+
+def _build_bilibili_opener(settings: Settings) -> urllib.request.OpenerDirector:
+    handlers = []
+    bilibili_cookies_file = effective_bilibili_cookies_file(settings)
+    if bilibili_cookies_file:
+        cookies_file = Path(bilibili_cookies_file).expanduser()
+        if cookies_file.exists():
+            jar = http.cookiejar.MozillaCookieJar(str(cookies_file))
+            jar.load(ignore_discard=True, ignore_expires=True)
+            handlers.append(urllib.request.HTTPCookieProcessor(jar))
+    return urllib.request.build_opener(*handlers)
+
+
+def _bilibili_json(opener: urllib.request.OpenerDirector, url: str) -> Dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Referer": "https://www.bilibili.com/",
+        },
+    )
+    try:
+        with opener.open(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        logger.warning("bilibili api request failed url=%s error=%s", url, type(exc).__name__)
+        return {"__fetch_error": type(exc).__name__}
+
+
+def _download_subtitle_once(
+    ytdlp: str,
+    url: str,
+    source_type: str,
+    settings: Settings,
+    tmpdir: str,
+    auto: bool,
+    languages: Optional[str] = None,
+) -> str:
+    output = Path(tmpdir) / "subtitle"
+    command = [
+        ytdlp,
+        "--skip-download",
+        "--no-playlist",
+        "--no-warnings",
+        "--write-auto-subs" if auto else "--write-subs",
+        "--sub-lang",
+        languages or ("zh,en,zh-Hans,zh-Hant" if not auto else "zh,en"),
+        "--sub-format",
+        "vtt/srt/best",
+        "-o",
+        str(output),
+    ]
+    bilibili_cookies_file = effective_bilibili_cookies_file(settings)
+    if source_type == "bilibili" and bilibili_cookies_file:
+        command.extend(["--cookies", str(Path(bilibili_cookies_file).expanduser())])
+    _add_youtube_auth_args(command, source_type, settings)
+    command.append(url)
+    completed = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=max(60, int(settings.request_timeout_seconds) + 60),
+    )
+    combined = f"{completed.stdout}\n{completed.stderr}"
+    if "PO token was not provided" in combined or "po token" in combined.lower():
+        return "po_token_missing"
+    if completed.returncode != 0:
+        return "download_failed"
+    if "There are no subtitles for the requested languages" in combined:
+        return "no_requested_language_subtitles"
+    return "downloaded"
+
+
+def _first_subtitle_transcript(candidates: List[Path]) -> str:
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        if candidate.suffix.lower() == ".srt":
+            transcript = _parse_srt(text)
+        else:
+            transcript = _parse_vtt(text)
+        if transcript:
+            return transcript
+    return ""
+
+
+def _read_first_subtitle(candidates: List[Path]) -> str:
+    for candidate in candidates:
+        if candidate.is_file() and candidate.suffix.lower() in {".vtt", ".srt"}:
+            text = candidate.read_text(encoding="utf-8", errors="replace").strip()
+            if candidate.suffix.lower() == ".srt":
+                return _srt_to_vtt(text)
+            return text
+    return ""
+
+
+def _add_youtube_auth_args(command: List[str], source_type: str, settings: Settings) -> None:
+    if source_type != "youtube":
+        return
+    if settings.youtube_cookies_file:
+        cookies_file = Path(settings.youtube_cookies_file).expanduser()
+        if cookies_file.exists():
+            command.extend(["--cookies", str(cookies_file)])
+    if settings.youtube_extractor_args:
+        command.extend(["--extractor-args", settings.youtube_extractor_args])
+
+
+def _transcribe_audio_file(
+    audio_path: Path,
+    tmp: Path,
+    settings: Settings,
+    duration: object,
+    language_hint: str = "auto",
+) -> Dict[str, str]:
+    backend = settings.transcription_backend.strip().lower()
+    candidates = []
+    if backend:
+        candidates.append(backend)
+    for fallback in ["mlx_whisper", "faster_whisper", "whisper_cpp"]:
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    for candidate in candidates:
+        if candidate == "mlx_whisper":
+            result = _transcribe_with_external_command(
+                executable=settings.mlx_whisper_path,
+                args=[str(audio_path), "--output-dir", str(tmp), "--format", "srt"],
+                tmp=tmp,
+                duration=duration,
+                status="transcribed_mlx_whisper",
+            )
+        elif candidate == "faster_whisper":
+            result = _transcribe_with_external_command(
+                executable=settings.faster_whisper_path,
+                args=[str(audio_path), "--output_dir", str(tmp), "--output_format", "srt"],
+                tmp=tmp,
+                duration=duration,
+                status="transcribed_faster_whisper",
+            )
+        else:
+            result = _transcribe_with_whisper_cpp(audio_path, tmp, settings, duration, language_hint)
+        if result.get("transcript"):
+            return result
+    return {"transcript": "", "subtitle_vtt": "", "status": "transcription_failed"}
+
+
+def _transcribe_with_whisper_cpp(
+    audio_path: Path,
+    tmp: Path,
+    settings: Settings,
+    duration: object,
+    language_hint: str = "auto",
+) -> Dict[str, str]:
+    whisper_model = Path(settings.whisper_model_path).expanduser()
+    if not whisper_model.exists():
+        return {"transcript": "", "subtitle_vtt": "", "status": "dependency_missing_whisper_model"}
+    whisper_cli = shutil.which(settings.whisper_cli_path) or settings.whisper_cli_path
+    if not whisper_cli or not Path(whisper_cli).exists():
+        return {"transcript": "", "subtitle_vtt": "", "status": "dependency_missing_whisper_cli"}
+    output_prefix = tmp / "transcript"
+    transcribe = subprocess.run(
+        [
+            whisper_cli,
+            "-m",
+            str(whisper_model),
+            "-f",
+            str(audio_path),
+            "-l",
+            language_hint or "auto",
+            "-of",
+            str(output_prefix),
+            "-otxt",
+            "-osrt",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=max(180, int(float(duration or 60) * 4)),
+    )
+    if transcribe.returncode != 0:
+        return {"transcript": "", "subtitle_vtt": "", "status": "transcription_failed"}
+    return _transcription_files_to_result(tmp, "transcribed_whisper_cpp")
+
+
+def _transcribe_with_external_command(
+    executable: str,
+    args: List[str],
+    tmp: Path,
+    duration: object,
+    status: str,
+) -> Dict[str, str]:
+    path = shutil.which(executable) or executable
+    if not path or not Path(path).exists():
+        return {"transcript": "", "subtitle_vtt": "", "status": f"dependency_missing_{status}"}
+    completed = subprocess.run(
+        [path, *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=max(180, int(float(duration or 60) * 4)),
+    )
+    if completed.returncode != 0:
+        return {"transcript": "", "subtitle_vtt": "", "status": "transcription_failed"}
+    return _transcription_files_to_result(tmp, status)
+
+
+def _transcription_files_to_result(tmp: Path, status: str) -> Dict[str, str]:
+    srt_files = sorted(tmp.glob("*.srt"))
+    txt_files = sorted(tmp.glob("*.txt"))
+    if srt_files:
+        srt = srt_files[0].read_text(encoding="utf-8", errors="replace")
+        transcript = _parse_srt(srt)
+        if transcript:
+            return {"transcript": transcript, "subtitle_vtt": _srt_to_vtt(srt), "status": status}
+    if txt_files:
+        transcript = txt_files[0].read_text(encoding="utf-8", errors="replace").strip()
+        if transcript:
+            return {"transcript": transcript, "subtitle_vtt": "", "status": status}
+    return {"transcript": "", "subtitle_vtt": "", "status": "transcription_failed"}
+
+
+def _transcript_matches_video(transcript: str, metadata: Dict[str, Any]) -> bool:
+    if _is_low_value_subtitle(transcript):
+        return False
+    duration = _metadata_duration_seconds(metadata)
+    coverage = _transcript_coverage_seconds(transcript)
+    if duration and duration >= 300 and coverage and coverage < min(180, duration * 0.15):
+        return False
+    haystack = transcript[:1200]
+    fields = [
+        str(metadata.get("title") or ""),
+        str(metadata.get("description") or ""),
+        " ".join(str(tag) for tag in (metadata.get("tags") or [])),
+    ]
+    tokens = set()
+    for field in fields:
+        for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{4,}|\d{2,}", field):
+            if token not in {"Description", "Title", "Duration"} and not token.isdigit():
+                tokens.add(token.lower())
+    if not tokens:
+        return True
+    matches = sum(1 for token in tokens if token in haystack.lower())
+    return matches >= 1
+
+
+def _metadata_duration_seconds(metadata: Dict[str, Any]) -> float:
+    try:
+        return float(metadata.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _transcript_coverage_seconds(transcript: str) -> float:
+    max_seconds = 0.0
+    for match in re.finditer(r"\[(\d{1,2}:)?\d{2}:\d{2}-(?P<end>(?:\d{1,2}:)?\d{2}:\d{2})\]", transcript):
+        max_seconds = max(max_seconds, _timestamp_to_seconds(match.group("end")))
+    return max_seconds
+
+
+def _timestamp_to_seconds(value: str) -> float:
+    parts = [int(part) for part in value.split(":")]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return 0.0
+
+
+def _is_low_value_subtitle(transcript: str) -> bool:
+    lines = [re.sub(r"^\[[^\]]+\]\s*", "", line).strip() for line in transcript.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return True
+    music_like = 0
+    for line in lines:
+        cleaned = re.sub(r"[\s♪♫~～,，。.!！?？-]+", "", line).lower()
+        if cleaned in {"音乐", "music", "bgm"}:
+            music_like += 1
+    meaningful_chars = sum(len(line) for line in lines) - music_like * 2
+    return music_like / len(lines) >= 0.75 or meaningful_chars < 30
+
+
+def _parse_vtt(text: str) -> str:
+    lines: List[str] = []
+    current_time = ""
+    buffer: List[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line == "WEBVTT" or line.startswith("Kind:") or line.startswith("Language:"):
+            if current_time and buffer:
+                lines.append(f"[{current_time}] {_clean_subtitle_text(' '.join(buffer))}")
+            current_time = ""
+            buffer = []
+            continue
+        if "-->" in line:
+            if current_time and buffer:
+                lines.append(f"[{current_time}] {_clean_subtitle_text(' '.join(buffer))}")
+            current_time = _normalize_time_range(line)
+            buffer = []
+            continue
+        if current_time and not line.isdigit():
+            buffer.append(line)
+    if current_time and buffer:
+        lines.append(f"[{current_time}] {_clean_subtitle_text(' '.join(buffer))}")
+    return "\n".join(_dedupe_subtitle_lines(lines))
+
+
+def _parse_srt(text: str) -> str:
+    lines: List[str] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        parts = [line.strip() for line in block.splitlines() if line.strip()]
+        if len(parts) < 2:
+            continue
+        time_line = next((part for part in parts if "-->" in part), "")
+        if not time_line:
+            continue
+        text_parts = [part for part in parts if "-->" not in part and not part.isdigit()]
+        subtitle = _clean_subtitle_text(" ".join(text_parts))
+        if subtitle:
+            lines.append(f"[{_normalize_time_range(time_line)}] {subtitle}")
+    return "\n".join(_dedupe_subtitle_lines(lines))
+
+
+def _normalize_time_range(value: str) -> str:
+    start, end = value.split("-->", 1)
+    return f"{_compact_timestamp(start)}-{_compact_timestamp(end)}"
+
+
+def _compact_timestamp(value: str) -> str:
+    cleaned = value.strip().split()[0].replace(",", ".")
+    if "." in cleaned:
+        cleaned = cleaned.split(".", 1)[0]
+    if cleaned.startswith("00:"):
+        cleaned = cleaned[3:]
+    return cleaned
+
+
+def _format_seconds(value: object) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return ""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _clean_subtitle_text(value: str) -> str:
+    value = re.sub(r"<[^>]+>", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _dedupe_subtitle_lines(lines: List[str]) -> List[str]:
+    cleaned = []
+    seen = set()
+    for line in lines:
+        key = re.sub(r"^\[[^\]]+\]\s*", "", line)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(line)
+    return cleaned
+
+
+def _subtitle_priority(path: Path) -> tuple[int, str]:
+    name = path.name.lower()
+    if ".zh" in name or ".cmn" in name:
+        return (0, name)
+    if ".en" in name:
+        return (1, name)
+    return (2, name)
+
+
+def _srt_to_vtt(text: str) -> str:
+    body = re.sub(r"^\s*\d+\s*$", "", text, flags=re.MULTILINE)
+    body = body.replace(",", ".")
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return "WEBVTT\n\n" + body + "\n" if body else ""
+
+
+def _segments_to_vtt(segments: List[tuple[object, object, str]]) -> str:
+    if not segments:
+        return ""
+    lines = ["WEBVTT", ""]
+    for start, end, text in segments:
+        start_text = _vtt_timestamp(start)
+        end_text = _vtt_timestamp(end)
+        if start_text and end_text:
+            lines.append(f"{start_text} --> {end_text}")
+            lines.append(text)
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _vtt_timestamp(value: object) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return ""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
+
+
+def _plain_transcript(transcript: str) -> str:
+    lines = []
+    for line in transcript.splitlines():
+        cleaned = re.sub(r"^\[[^\]]+\]\s*", "", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines)
+
+
+def _compact_raw_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    allowed = {
+        "id",
+        "title",
+        "uploader",
+        "channel",
+        "duration",
+        "duration_string",
+        "upload_date",
+        "webpage_url",
+        "extractor",
+        "description",
+        "tags",
+        "subtitles",
+        "automatic_captions",
+        "language",
+    }
+    return {key: data.get(key) for key in allowed if key in data}
+
+
+def _metadata_advertises_subtitles(data: Dict[str, Any]) -> bool:
+    return bool(data.get("subtitles") or data.get("automatic_captions"))
+
+
+def _combine_status(first: str, second: str) -> str:
+    if first in {"manual_subtitle", "auto_subtitle", "bilibili_subtitle"}:
+        return first
+    if first == "youtube_po_token_required":
+        return f"{first};{second}" if second else first
+    if second:
+        return second
+    return first or "subtitle_unavailable"
+
+
+def _progress(callback: Optional[ProgressCallback], stage: str, progress: float) -> None:
+    if callback:
+        callback(stage, progress)
