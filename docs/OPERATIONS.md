@@ -231,11 +231,11 @@ scripts/easysourceflow asr-eval reference.txt hypothesis.txt 600
 
 ### 4.11 模型配置检查
 
-Web 控制台会显示当前 provider、Fast/Pro 模型、兼容接口地址和该 provider 的 API Key 是否已配置。
+Web 控制台会显示当前 provider、Fast/Pro 模型、兼容接口地址和该 provider 的 API Key 是否已配置。模型字段既提供常用预设，也允许输入服务商实际支持的模型 ID。
 
 Web 控制台也会显示当前 ASR 后端、转写时长上限、Whisper 模型路径是否存在，以及文档解析器能力。
 
-模型 provider、Fast/Pro 模型和 API Key 可以在 Web 中保存并测试；ASR 配置仍通过 `.env` 或 launchd runtime env 管理。API Key 不会由状态接口返回。
+模型 provider、Fast/Pro 模型和 API Key 可以在 Web 中保存并测试；Ollama 和默认配置的 LM Studio 使用回环地址，不强制要求 API Key。ASR 配置仍通过 `.env` 或 launchd runtime env 管理。API Key 不会由状态接口返回。
 
 如果当前云端模型调用失败，服务会使用本地抽取式摘要兜底，但结果会明确写出 `local_extractive_fallback` 和失败原因；日志也会记录错误类型。
 

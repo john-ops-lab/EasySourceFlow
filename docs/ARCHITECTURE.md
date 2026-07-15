@@ -88,7 +88,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 
 ### 3.6 Summarization engine
 
-总结器把提取文本、用户指令、来源元数据组合成模型输入。当前主路径是 OpenAI-compatible Chat Completions API，可在 Web 中选择 DeepSeek、OpenAI、Qwen、Kimi、智谱或 OpenRouter。无 API key 或选择本地 provider 时，会走本地抽取式摘要兜底。
+总结器把提取文本、用户指令、来源元数据组合成模型输入。主路径使用 OpenAI-compatible Chat Completions；豆包按当前官方接口使用 Responses API。Web 预置 DeepSeek、OpenAI、通义千问、Kimi、智谱、MiniMax、Gemini、硅基流动、Ollama、LM Studio、xAI、豆包、百度千帆、腾讯混元和 OpenRouter。云端服务缺少 API Key 时走本地抽取式摘要兜底；回环地址上的 Ollama 和 LM Studio 可在无 Key 时调用。
 
 ### 3.7 SQLite store
 

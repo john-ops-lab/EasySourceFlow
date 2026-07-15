@@ -305,6 +305,25 @@ class HttpAndMcpTests(unittest.TestCase):
                 api_server = build_server(settings)
                 start_server(api_server)
                 try:
+                    with urlopen(f"http://127.0.0.1:{api_server.server_port}/model", timeout=10) as response:
+                        model_status = json.loads(response.read().decode("utf-8"))
+                    services = {service["id"]: service for service in model_status["model_services"]}
+                    self.assertTrue(
+                        {
+                            "minimax",
+                            "gemini",
+                            "siliconflow",
+                            "ollama",
+                            "lmstudio",
+                            "xai",
+                            "doubao",
+                            "qianfan",
+                            "hunyuan",
+                        }.issubset(services)
+                    )
+                    self.assertFalse(services["ollama"]["requires_api_key"])
+                    self.assertEqual(services["doubao"]["api_style"], "responses")
+
                     model_payload = json.dumps(
                         {
                             "provider": "openai_compatible",

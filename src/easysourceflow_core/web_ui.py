@@ -1104,7 +1104,7 @@ INDEX_HTML = """<!doctype html>
     .control-row { grid-template-columns: 140px minmax(0, 1fr); max-width: 760px; }
     #model-choice-panel .settings-grid > .row:first-child { background: #fafafa; border: 1px solid var(--line); border-radius: 7px; padding: 18px; margin-bottom: 16px; }
     #model-choice-panel .settings-grid > .row:last-child { padding-top: 18px; }
-    .model-provider-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 18px; }
+    .model-provider-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; margin: 14px 0 18px; }
     .model-provider-button { min-height: 42px; background: #fff; color: var(--ink); border-color: var(--line); }
     .model-provider-button.active { color: var(--pink); border-color: var(--pink); background: var(--pink-soft); }
     .unsaved-notice { display: none; margin: 14px 0 0; color: var(--gold); font-size: 12px; }
@@ -1511,11 +1511,13 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="control-row">
               <label for="model-name">默认模型</label>
-              <select id="model-name"></select>
+              <input id="model-name" list="model-name-options" autocomplete="off" placeholder="选择或输入模型 ID">
+              <datalist id="model-name-options"></datalist>
             </div>
             <div class="control-row">
               <label for="strong-model-name">Pro 模型</label>
-              <select id="strong-model-name"></select>
+              <input id="strong-model-name" list="strong-model-name-options" autocomplete="off" placeholder="选择或输入 Pro 模型 ID">
+              <datalist id="strong-model-name-options"></datalist>
             </div>
             <div class="actions">
               <button id="model-save-button" type="button">保存选择</button>
@@ -2640,9 +2642,9 @@ INDEX_HTML = """<!doctype html>
       if (activeService.id === service.id) [model.model, model.strong_model].forEach((name) => {
         if (name && !names.includes(name)) names.push(name);
       });
-      const options = names.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
-      $('model-name').innerHTML = options;
-      $('strong-model-name').innerHTML = options;
+      const options = names.map((name) => `<option value="${esc(name)}"></option>`).join('');
+      $('model-name-options').innerHTML = options;
+      $('strong-model-name-options').innerHTML = options;
       const serviceDefault = names.includes(service.default_model) ? service.default_model : names[0];
       const serviceStrong = names.includes(service.strong_model) ? service.strong_model : names[1] || serviceDefault;
       const defaultModel = previousModel && names.includes(previousModel)
@@ -2678,16 +2680,22 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderCredentialStatus(service) {
-      const configured = service.provider === 'local' || Boolean(state.model?.credential_status?.[service.id]);
+      const configured = Boolean(state.model?.credential_status?.[service.id]);
+      const isFallback = service.provider === 'local';
+      const keyOptional = service.requires_api_key === false;
       $('model-service-pill').textContent = service.label;
-      $('model-service-help').textContent = service.provider === 'local'
+      $('model-service-help').textContent = isFallback
         ? '本地兜底不调用外部模型。'
+        : keyOptional
+          ? `本机兼容接口：${service.base_url}。模型 ID 可直接输入。`
         : `官方兼容接口：${service.base_url}`;
-      $('model-key-status').textContent = service.provider === 'local'
-        ? '本地模型不需要 API Key。'
+      $('model-key-status').textContent = isFallback
+        ? '本地抽取式兜底不需要 API Key。'
+        : keyOptional
+          ? configured ? '已配置可选 API Key；留空不会修改。' : '默认不需要 API Key；服务端启用鉴权时再填写。'
         : configured ? `${service.label} 的 API Key 已配置，留空不会修改。` : `${service.label} 尚未配置 API Key。`;
-      $('config-api-key').disabled = service.provider === 'local';
-      $('config-clear-key').disabled = service.provider === 'local' || !configured;
+      $('config-api-key').disabled = isFallback;
+      $('config-clear-key').disabled = isFallback || !configured;
     }
 
     function markModelDirty() {

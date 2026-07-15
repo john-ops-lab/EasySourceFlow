@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from .config import Settings, effective_bilibili_cookies_file, effective_youtube_cookies_file
+from .digest import _model_api_ready, _model_response_text, _model_temperature, _uses_responses_api
 
 
 def run_health_checks(settings: Settings) -> dict:
@@ -58,32 +59,27 @@ def _check_deepseek(settings: Settings) -> dict:
     provider = settings.model_provider.lower()
     if provider not in {"deepseek", "openai_compatible"}:
         return _result("deepseek_api", True, "External model API is not the active provider.", required=False)
-    if not settings.model_api_key:
+    if not _model_api_ready(settings):
         return _result("deepseek_api", False, "Model API key is not configured.", required=True, fix="Add EASYSOURCEFLOW_MODEL_API_KEY to .env or configure it in Web.")
-    payload = {
-        "model": settings.model,
-        "messages": [{"role": "user", "content": "只回复 ok"}],
-        "max_tokens": 8,
-        "temperature": 0,
-    }
+    uses_responses_api = _uses_responses_api(settings)
+    payload = {"model": settings.model, "temperature": _model_temperature(settings)}
+    if uses_responses_api:
+        payload.update({"input": "只回复 ok", "max_output_tokens": 8})
+    else:
+        payload.update({"messages": [{"role": "user", "content": "只回复 ok"}], "max_tokens": 8})
+    headers = {"content-type": "application/json"}
+    if settings.model_api_key:
+        headers["authorization"] = "Bearer " + settings.model_api_key
     request = Request(
-        settings.model_base_url.rstrip("/") + "/chat/completions",
+        settings.model_base_url.rstrip("/") + ("/responses" if uses_responses_api else "/chat/completions"),
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "authorization": "Bearer " + settings.model_api_key,
-        },
+        headers=headers,
         method="POST",
     )
     try:
         with urlopen(request, timeout=20) as response:
             data = json.loads(response.read().decode("utf-8"))
-        choices = data.get("choices") if isinstance(data, dict) else None
-        content = ""
-        if choices and isinstance(choices, list):
-            message = (choices[0] or {}).get("message") if isinstance(choices[0], dict) else None
-            if isinstance(message, dict):
-                content = str(message.get("content") or message.get("reasoning_content") or "").strip()
+        content = _model_response_text(data) if isinstance(data, dict) else ""
         if not content:
             error = data.get("error") if isinstance(data, dict) else None
             message = error.get("message") if isinstance(error, dict) else "Model API response did not include a chat completion."

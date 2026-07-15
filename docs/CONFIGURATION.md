@@ -33,16 +33,16 @@ Never commit `.env`, API keys, cookies, database files, logs, generated outputs,
 | `EASYSOURCEFLOW_MODEL` | `deepseek-v4-flash` | Default model for fast summaries. |
 | `EASYSOURCEFLOW_STRONG_MODEL` | `deepseek-v4-pro` | Strong model for video/pro summaries. |
 | `EASYSOURCEFLOW_MODEL_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible API base URL. |
-| `EASYSOURCEFLOW_MODEL_API_KEY` | empty | API key. Required for cloud model summaries. |
+| `EASYSOURCEFLOW_MODEL_API_KEY` | empty | API key. Required for cloud model summaries; optional for loopback Ollama/LM Studio endpoints. |
 | `EASYSOURCEFLOW_MODEL_API_KEY_<SERVICE_ID>` | empty | Web-managed credential for one provider, such as `..._DEEPSEEK` or `..._OPENAI`. Values are never returned by the API. |
 | `EASYSOURCEFLOW_SUMMARY_PROMPT_FILE` | `$DATA_DIR/config/summary-prompt.txt` | Multiline hard rules and Markdown template shared by every configured cloud model. |
 | `EASYSOURCEFLOW_SUMMARY_PROMPT` | built-in prompt | Optional one-line fallback when the prompt file does not exist. |
 | `EASYSOURCEFLOW_SUMMARY_SYSTEM_PROMPT` | empty | Deprecated compatibility alias for `EASYSOURCEFLOW_SUMMARY_PROMPT`. |
 | `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY` | empty | Backward-compatible aliases. Prefer `EASYSOURCEFLOW_MODEL_*`. |
 
-The Web console stores credentials separately for each preset provider. The generic `EASYSOURCEFLOW_MODEL_API_KEY` value always represents the active provider, so switching providers cannot silently reuse another provider's key.
+The Web console stores credentials separately for each preset provider. The generic `EASYSOURCEFLOW_MODEL_API_KEY` value always represents the active provider, so switching providers cannot silently reuse another provider's key. Preset model IDs are suggestions: the Fast and Pro fields also accept a model ID supported by the selected service.
 
-The Web prompt is model-independent: DeepSeek, OpenAI, Qwen, Kimi, GLM, and other OpenAI-compatible services all receive the same configured rules and Markdown template. EasySourceFlow appends source metadata, source-specific requirements, and content at runtime. The local extractive fallback does not call a model and therefore does not use this prompt. Changing the prompt invalidates the summary cache for new jobs.
+The Web prompt is model-independent: every configured cloud or local generative model receives the same rules and Markdown template. EasySourceFlow appends source metadata, source-specific requirements, and content at runtime. The local extractive fallback does not call a model and therefore does not use this prompt. Changing the prompt invalidates the summary cache for new jobs.
 
 ## Agent Integration
 

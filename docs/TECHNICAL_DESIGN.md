@@ -11,7 +11,7 @@
 - 视频提取: `yt-dlp`。
 - 音频处理: `ffmpeg`。
 - 转写: `whisper_cpp`，并保留 `mlx_whisper`、`faster_whisper` 配置。
-- 总结: OpenAI-compatible Chat Completions API；Web 预置 DeepSeek、OpenAI、Qwen、Kimi、智谱和 OpenRouter。
+- 总结: OpenAI-compatible Chat Completions 和 Responses API；Web 预置常见国内外云端服务商及 Ollama、LM Studio 本地服务。
 - 输出: 本地 Markdown 文件和视频资源包。
 - Web 控制台: 内置 HTML/CSS/JavaScript，挂载在 `GET /`。
 
