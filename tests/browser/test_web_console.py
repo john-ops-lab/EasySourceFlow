@@ -44,7 +44,13 @@ class WebConsoleBrowserTests(unittest.TestCase):
                     self.assertTrue(page.locator("#force-refresh").is_visible())
 
                     page.locator('[data-tab="maintenance-panel"]').click()
-                    self.assertTrue(page.locator("#youtube-import-button").is_visible())
+                    self.assertEqual(page.locator("#bilibili-open-login-button").text_content(), "重新扫码接入")
+                    self.assertEqual(page.locator("#youtube-open-login-button").text_content(), "重新登录接入")
+                    self.assertTrue(page.locator("#bilibili-import-button").is_hidden())
+                    self.assertTrue(page.locator("#youtube-import-button").is_hidden())
+                    self.assertTrue(page.locator("#bilibili-logout-button").is_visible())
+                    self.assertTrue(page.locator("#youtube-logout-button").is_visible())
+                    self.assertIn("Chrome 当前登录态", page.locator("#youtube-account-status").text_content())
                     page.locator('[data-maintenance-tab="model-maintenance"]').click()
                     page.locator('[data-service-id="openai"]').click()
                     self.assertEqual(page.locator("#model-service").input_value(), "openai")
@@ -106,6 +112,18 @@ class WebConsoleBrowserTests(unittest.TestCase):
 
 def _settings(tmp: str) -> Settings:
     root = Path(tmp)
+    secrets_dir = root / "data" / "secrets"
+    secrets_dir.mkdir(parents=True)
+    bilibili_cookies = secrets_dir / "bilibili-cookies.txt"
+    bilibili_cookies.write_text(
+        "# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tTEST_VALUE\n",
+        encoding="utf-8",
+    )
+    youtube_cookies = secrets_dir / "youtube-cookies.txt"
+    youtube_cookies.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tTEST_VALUE\n",
+        encoding="utf-8",
+    )
     return Settings(
         host="127.0.0.1",
         port=0,
@@ -116,9 +134,10 @@ def _settings(tmp: str) -> Settings:
         request_timeout_seconds=2,
         max_content_chars=10000,
         ytdlp_path="",
-        bilibili_cookies_file="",
-        youtube_cookies_file="",
+        bilibili_cookies_file=str(bilibili_cookies),
+        youtube_cookies_file=str(youtube_cookies),
         youtube_extractor_args="",
+        youtube_browser_cookie_source="chrome:Default",
         ffmpeg_path="ffmpeg",
         whisper_cli_path="whisper-cli",
         whisper_model_path="",

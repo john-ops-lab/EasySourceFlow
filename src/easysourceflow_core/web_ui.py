@@ -1438,10 +1438,11 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="meta" id="bilibili-account-status">读取状态中</div>
             <div class="actions">
-              <button class="secondary" id="bilibili-open-login-button" type="button">打开扫码页</button>
-              <button class="secondary" id="bilibili-import-button" type="button">导入 Chrome 登录态</button>
+              <button class="secondary" id="bilibili-open-login-button" type="button">扫码登录并自动接入</button>
+              <button class="secondary" id="bilibili-import-button" type="button" hidden>手动重试</button>
+              <button class="link-button danger" id="bilibili-logout-button" type="button" hidden>退出登录</button>
             </div>
-            <div class="status-line" id="bilibili-action-status"></div>
+            <div class="status-line" id="bilibili-action-status" role="status" aria-live="polite"></div>
           </div>
 
           <div class="row">
@@ -1451,10 +1452,11 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="meta" id="youtube-account-status">读取状态中</div>
             <div class="actions">
-              <button class="secondary" id="youtube-open-login-button" type="button">打开 YouTube</button>
-              <button class="secondary" id="youtube-import-button" type="button">接入 Chrome 实时登录态</button>
+              <button class="secondary" id="youtube-open-login-button" type="button">登录并自动接入</button>
+              <button class="secondary" id="youtube-import-button" type="button" hidden>手动重试</button>
+              <button class="link-button danger" id="youtube-logout-button" type="button" hidden>退出登录</button>
             </div>
-            <div class="status-line" id="youtube-action-status"></div>
+            <div class="status-line" id="youtube-action-status" role="status" aria-live="polite"></div>
           </div>
 
           <div class="row">
@@ -2566,8 +2568,8 @@ INDEX_HTML = """<!doctype html>
     function youtubeCookieMessage(cookies) {
       if (cookies.browser_cookie_source_configured) return '处理 YouTube 时会直接读取 Chrome 当前登录态，避免复用已轮换的 Cookie 文件。';
       if (cookies.ok && cookies.authenticated) return '已检测到 YouTube 登录 Cookie；处理视频时仍会由 YouTube 验证账号和访问权限。';
-      if (cookies.ok) return '已导入 YouTube Cookie；如仍要求登录，请重新导入 Chrome 登录态。';
-      if (cookies.exists) return '登录态文件中没有可用的 YouTube Cookie，请重新导入。';
+      if (cookies.ok) return '已接入 YouTube Cookie；如仍要求登录，请重新执行自动接入。';
+      if (cookies.exists) return '登录态文件中没有可用的 YouTube Cookie，请重新登录并自动接入。';
       return '尚未导入 YouTube 登录态。';
     }
 
@@ -2576,18 +2578,24 @@ INDEX_HTML = """<!doctype html>
       state.modelServices = model.model_services || [];
       $('bilibili-status-pill').textContent = cookies.ok ? '可用' : '需处理';
       $('bilibili-status-pill').className = `status ${cookies.ok ? 'succeeded' : 'failed'}`;
+      $('bilibili-open-login-button').textContent = cookies.ok ? '重新扫码接入' : '扫码登录并自动接入';
+      $('bilibili-logout-button').hidden = !cookies.ok;
       $('bilibili-account-status').innerHTML = `
         <div>${esc(bilibiliCookieMessage(cookies))}</div>
         <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(cookies.path || '')} · ${cookies.size || 0} B · ${esc(cookies.updated_at || '-')}</div></details>
       `;
       $('youtube-status-pill').textContent = youtubeCookies.ok ? (youtubeCookies.browser_cookie_source_configured ? '已接入' : '已导入') : '需处理';
       $('youtube-status-pill').className = `status ${youtubeCookies.ok ? 'succeeded' : 'failed'}`;
+      $('youtube-open-login-button').textContent = youtubeCookies.ok ? '重新登录接入' : '登录并自动接入';
+      $('youtube-logout-button').hidden = !youtubeCookies.ok;
       $('youtube-account-status').innerHTML = `
         <div>${esc(youtubeCookieMessage(youtubeCookies))}</div>
         <div class="meta">认证来源：${youtubeCookies.browser_cookie_source_configured ? 'Chrome 实时登录态' : '本地 Cookie 文件'}</div>
         <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(youtubeCookies.path || '')} · ${youtubeCookies.cookie_count || 0} 条 · ${esc(youtubeCookies.updated_at || '-')}</div></details>
         <div class="meta">PO Token 高级参数：${youtubeCookies.extractor_args_configured ? '已配置' : '未配置'}</div>
       `;
+      renderLoginImportStatus('bilibili', cookies);
+      renderLoginImportStatus('youtube', youtubeCookies);
       const service = currentModelService(model);
       $('model-service-pill').textContent = service.label || model.provider || '-';
       $('current-model-pill').textContent = model.model || '-';
@@ -2605,6 +2613,28 @@ INDEX_HTML = """<!doctype html>
       renderModelProviderButtons();
       renderCredentialStatus(selectedModelService());
       updateModelDraftState();
+    }
+
+    function renderLoginImportStatus(platform, cookies) {
+      const auto = cookies.auto_import || { status: 'idle', attempts: 0 };
+      const prefix = platform === 'bilibili' ? 'bilibili' : 'youtube';
+      const label = platform === 'bilibili' ? 'B站' : 'YouTube';
+      const status = $(`${prefix}-action-status`);
+      const fallback = $(`${prefix}-import-button`);
+      fallback.hidden = !['failed', 'timed_out'].includes(auto.status);
+      if (auto.status === 'waiting') {
+        status.textContent = `等待 ${label} 登录完成，后台将自动检测${auto.attempts ? `（已检查 ${auto.attempts} 次）` : ''}`;
+      } else if (auto.status === 'importing') {
+        status.textContent = `正在检测 Chrome 中的 ${label} 登录状态`;
+      } else if (auto.status === 'succeeded') {
+        status.textContent = `${label} 登录态已自动接入，无需其他操作`;
+      } else if (auto.status === 'failed') {
+        status.textContent = `自动接入失败：${auto.last_error || '无法读取 Chrome 登录态'}`;
+      } else if (auto.status === 'timed_out') {
+        status.textContent = '五分钟内未检测到登录；完成登录后可点“手动重试”';
+      } else if (!cookies.ok) {
+        status.textContent = `点击上方按钮登录，完成后会自动接入 ${label}`;
+      }
     }
 
     function currentModelService(model) {
@@ -2776,9 +2806,12 @@ INDEX_HTML = """<!doctype html>
       $('bilibili-open-login-button').disabled = true;
       try {
         const result = await postJson('/bilibili/login/open', {});
-        $('bilibili-action-status').textContent = result.ok ? '已打开 B 站扫码页；扫码登录后再点“导入 Chrome 登录态”。' : `请手动打开：${result.url}`;
+        $('bilibili-action-status').textContent = result.ok ? '已打开 B站扫码页；登录完成后将自动接入，无需返回点击' : `请手动打开：${result.url}`;
+        $('bilibili-import-button').hidden = result.ok;
+        if (result.ok) await loadRuntimeStatus();
       } catch (error) {
         $('bilibili-action-status').textContent = `打开失败：${error.message}`;
+        $('bilibili-import-button').hidden = false;
       } finally {
         $('bilibili-open-login-button').disabled = false;
       }
@@ -2803,9 +2836,12 @@ INDEX_HTML = """<!doctype html>
       $('youtube-open-login-button').disabled = true;
       try {
         const result = await postJson('/youtube/login/open', {});
-        $('youtube-action-status').textContent = result.ok ? '已打开 YouTube；确认登录后再点“接入 Chrome 实时登录态”。' : `请手动打开：${result.url}`;
+        $('youtube-action-status').textContent = result.ok ? '已打开 YouTube；登录完成后将自动接入，无需返回点击' : `请手动打开：${result.url}`;
+        $('youtube-import-button').hidden = result.ok;
+        if (result.ok) await loadRuntimeStatus();
       } catch (error) {
         $('youtube-action-status').textContent = `打开失败：${error.message}`;
+        $('youtube-import-button').hidden = false;
       } finally {
         $('youtube-open-login-button').disabled = false;
       }
@@ -2822,6 +2858,26 @@ INDEX_HTML = """<!doctype html>
         $('youtube-action-status').textContent = `导入失败：${error.message}`;
       } finally {
         $('youtube-import-button').disabled = false;
+      }
+    }
+
+    async function disconnectPlatformLogin(platform) {
+      const label = platform === 'bilibili' ? 'B站' : 'YouTube';
+      if (!confirm(`确认解除 EasySourceFlow 中的 ${label} 登录态？Chrome 中的账号不会退出。`)) return;
+      const button = $(`${platform}-logout-button`);
+      const status = $(`${platform}-action-status`);
+      button.disabled = true;
+      status.textContent = `正在解除 ${label} 登录态`;
+      try {
+        await postJson(`/cookies/${platform}/logout`, {});
+        status.textContent = `${label} 登录态已解除；Chrome 中的账号仍保持登录`;
+        await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
+        toast(`${label} 已退出 EasySourceFlow`, 'success');
+      } catch (error) {
+        status.textContent = `退出失败：${error.message}`;
+        toast(`退出失败：${error.message}`, 'error');
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -2940,8 +2996,10 @@ INDEX_HTML = """<!doctype html>
     $('model-save-button').addEventListener('click', saveModelChoice);
     $('bilibili-open-login-button').addEventListener('click', openBilibiliLogin);
     $('bilibili-import-button').addEventListener('click', importBilibiliCookies);
+    $('bilibili-logout-button').addEventListener('click', () => disconnectPlatformLogin('bilibili'));
     $('youtube-open-login-button').addEventListener('click', openYoutubeLogin);
     $('youtube-import-button').addEventListener('click', importYoutubeCookies);
+    $('youtube-logout-button').addEventListener('click', () => disconnectPlatformLogin('youtube'));
     $('model-service').addEventListener('change', () => selectModelService($('model-service').value));
     $('summary-prompt').addEventListener('input', () => {
       state.promptDirty = true;

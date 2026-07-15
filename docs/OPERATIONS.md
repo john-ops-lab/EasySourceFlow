@@ -155,10 +155,10 @@ LaunchAgent 文件位于：
 
 处理：
 
-1. 在 Chrome 登录 B 站。
-2. 在 Web“维护 → 账号与授权”导入 Chrome 登录态并确认状态为“可用”。
+1. 在 Web“维护 → 账号与授权”点击“扫码登录并自动接入”。
+2. 在打开的 Chrome 页面完成扫码；服务会自动检测登录态并显示“已自动接入”。
 3. 降低批量处理频率。
-4. 必要时重新导入或配置 Netscape cookies 文件。
+4. 自动检测失败或五分钟超时时，使用页面出现的“手动重试”，或配置 Netscape cookies 文件。
 
 不要在日志或聊天中打印 cookies。
 
@@ -166,12 +166,14 @@ LaunchAgent 文件位于：
 
 处理：
 
-1. 在 Chrome 中确认账号能正常打开目标视频。
-2. 在 Web“维护 → 账号与授权”接入 Chrome 当前登录态，并确认认证来源显示“Chrome 实时登录态”。
+1. 在 Web“维护 → 账号与授权”点击“登录并自动接入”，在打开的 Chrome 页面完成登录。
+2. 等待页面显示“已自动接入”，并确认认证来源为“Chrome 实时登录态”；正常情况下无需手工导入 Cookie。
 3. 更新 `yt-dlp` 后重试。EasySourceFlow 会区分 `youtube_auth_required`、`youtube_po_token_required` 和 `youtube_rate_limited`。
 4. 只有在错误明确要求 PO Token 时，才按照当前 [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) 配置受支持的 provider 或 `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS`。
 
 Cookie 和 PO Token 都属于登录凭据，不要写入 Git、聊天、日志或回归样例。EasySourceFlow 不绕过会员、年龄、地区或其他平台权限。
+
+需要解除授权时，在对应平台卡片点击“退出登录”。该操作会停止自动检测、清除 EasySourceFlow 的登录配置和默认 Cookie 快照，但不会退出 Chrome 中的网站账号；外部手工配置的 Cookie 文件只解除引用，不会删除原文件。
 
 YouTube 会轮换普通浏览器会话 Cookie。若本地 Cookie 文件存在但仍返回 `youtube_auth_required`，重新接入 Chrome；不要把长期保存的 Cookie 文件是否存在当作认证成功的充分条件。
 

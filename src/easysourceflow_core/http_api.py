@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,7 +37,12 @@ from .web_ui import delete_favorite, favorite_output, list_favorites, list_outpu
 
 logger = logging.getLogger(__name__)
 _AGENT_STATUS_LOCK = threading.Lock()
+_CONFIG_FILE_LOCK = threading.Lock()
 _MAX_SUMMARY_PROMPT_CHARS = 8000
+_BILIBILI_AUTH_COOKIE_NAMES = {"SESSDATA", "bili_jct", "DedeUserID"}
+_YOUTUBE_AUTH_COOKIE_NAMES = {"LOGIN_INFO", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}
+_LOGIN_AUTO_IMPORT_TIMEOUT_SECONDS = 300
+_LOGIN_AUTO_IMPORT_RETRY_SECONDS = (3, 5, 8, 12, 15)
 
 _MODEL_SERVICES = [
     {
@@ -195,8 +201,119 @@ _MODEL_SERVICE_KEY_NAMES = {
 }
 
 
+class _LoginImportCoordinator:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._lock = threading.Lock()
+        self._import_locks = {"bilibili": threading.Lock(), "youtube": threading.Lock()}
+        self._threads: dict[str, threading.Thread] = {}
+        self._stop_events: dict[str, threading.Event] = {}
+        self._states = {platform: self._new_state() for platform in self._import_locks}
+
+    def start(self, platform: str) -> dict:
+        with self._lock:
+            thread = self._threads.get(platform)
+            stop_event = self._stop_events.get(platform)
+            if thread and thread.is_alive() and stop_event and not stop_event.is_set():
+                return dict(self._states[platform])
+            now = datetime.now().isoformat(timespec="seconds")
+            self._states[platform] = {
+                "status": "waiting",
+                "attempts": 0,
+                "started_at": now,
+                "updated_at": now,
+                "last_error": "",
+            }
+            stop_event = threading.Event()
+            self._stop_events[platform] = stop_event
+            thread = threading.Thread(
+                target=self._run,
+                args=(platform, stop_event),
+                name=f"{platform}-login-auto-import",
+                daemon=True,
+            )
+            self._threads[platform] = thread
+            thread.start()
+            return dict(self._states[platform])
+
+    def status(self, platform: str) -> dict:
+        with self._lock:
+            return dict(self._states[platform])
+
+    def import_now(self, platform: str) -> dict:
+        try:
+            return self._attempt(platform)
+        except EasySourceFlowError as exc:
+            self._update(platform, "failed", last_error=exc.message)
+            raise
+
+    def disconnect(self, platform: str) -> dict:
+        with self._lock:
+            stop_event = self._stop_events.get(platform)
+            if stop_event:
+                stop_event.set()
+        with self._import_locks[platform]:
+            result = (
+                _disconnect_bilibili_login(self.settings)
+                if platform == "bilibili"
+                else _disconnect_youtube_login(self.settings)
+            )
+        with self._lock:
+            self._states[platform] = self._new_state()
+            result["auto_import"] = dict(self._states[platform])
+        return result
+
+    def _run(self, platform: str, stop_event: threading.Event) -> None:
+        deadline = time.monotonic() + _LOGIN_AUTO_IMPORT_TIMEOUT_SECONDS
+        retry_index = 0
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            try:
+                self._attempt(platform)
+                return
+            except EasySourceFlowError as exc:
+                if stop_event.is_set():
+                    return
+                if not exc.code.endswith("_login_not_ready"):
+                    self._update(platform, "failed", last_error=exc.message)
+                    return
+                self._update(platform, "waiting", last_error=exc.message)
+            delay = _LOGIN_AUTO_IMPORT_RETRY_SECONDS[
+                min(retry_index, len(_LOGIN_AUTO_IMPORT_RETRY_SECONDS) - 1)
+            ]
+            retry_index += 1
+            stop_event.wait(min(delay, max(0, deadline - time.monotonic())))
+        if not stop_event.is_set():
+            self._update(platform, "timed_out", last_error="Login was not detected within five minutes.")
+
+    def _attempt(self, platform: str) -> dict:
+        with self._import_locks[platform]:
+            self._update(platform, "importing", increment_attempts=True)
+            result = (
+                _import_bilibili_cookies(self.settings)
+                if platform == "bilibili"
+                else _import_youtube_cookies(self.settings)
+            )
+            self._update(platform, "succeeded", last_error="")
+            result["auto_import"] = self.status(platform)
+            return result
+
+    def _update(self, platform: str, status: str, *, last_error: str = "", increment_attempts: bool = False) -> None:
+        with self._lock:
+            state = self._states[platform]
+            state["status"] = status
+            state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            state["last_error"] = last_error
+            if increment_attempts:
+                state["attempts"] += 1
+
+    @staticmethod
+    def _new_state() -> dict:
+        return {"status": "idle", "attempts": 0, "started_at": None, "updated_at": None, "last_error": ""}
+
+
 def build_server(settings: Settings) -> ThreadingHTTPServer:
     service = EasySourceFlowService(settings)
+    login_imports = _LoginImportCoordinator(settings)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"easysourceflowd/{__version__}"
@@ -231,10 +348,14 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 self._json(service.search_outputs(q, source_type=source, limit=limit))
                 return
             if parsed.path == "/cookies/bilibili":
-                self._json(_bilibili_cookie_status(settings))
+                result = _bilibili_cookie_status(settings)
+                result["auto_import"] = login_imports.status("bilibili")
+                self._json(result)
                 return
             if parsed.path == "/cookies/youtube":
-                self._json(_youtube_cookie_status(settings))
+                result = _youtube_cookie_status(settings)
+                result["auto_import"] = login_imports.status("youtube")
+                self._json(result)
                 return
             if parsed.path == "/model":
                 self._json(_model_status(settings))
@@ -359,8 +480,10 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 "/prompt",
                 "/bilibili/login/open",
                 "/cookies/bilibili/import",
+                "/cookies/bilibili/logout",
                 "/youtube/login/open",
                 "/cookies/youtube/import",
+                "/cookies/youtube/logout",
                 "/downloads",
             }:
                 self._json({"error": {"code": "not_found", "message": "Endpoint not found."}}, status=404)
@@ -411,22 +534,34 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 self._json(_model_test(settings, service))
                 return
             if parsed.path == "/bilibili/login/open":
-                self._json(_open_bilibili_login())
+                result = _open_bilibili_login()
+                if result["ok"] and payload.get("auto_import", True):
+                    result["auto_import"] = login_imports.start("bilibili")
+                self._json(result)
                 return
             if parsed.path == "/cookies/bilibili/import":
                 try:
-                    self._json(_import_bilibili_cookies(settings))
+                    self._json(login_imports.import_now("bilibili"))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
                 return
+            if parsed.path == "/cookies/bilibili/logout":
+                self._json(login_imports.disconnect("bilibili"))
+                return
             if parsed.path == "/youtube/login/open":
-                self._json(_open_youtube_login())
+                result = _open_youtube_login()
+                if result["ok"] and payload.get("auto_import", True):
+                    result["auto_import"] = login_imports.start("youtube")
+                self._json(result)
                 return
             if parsed.path == "/cookies/youtube/import":
                 try:
-                    self._json(_import_youtube_cookies(settings))
+                    self._json(login_imports.import_now("youtube"))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
+                return
+            if parsed.path == "/cookies/youtube/logout":
+                self._json(login_imports.disconnect("youtube"))
                 return
             if parsed.path == "/documents":
                 try:
@@ -555,6 +690,7 @@ def _bilibili_cookie_status(settings: Settings) -> dict:
         effective_bilibili_cookies_file(settings),
         default_bilibili_cookies_file(settings),
         {"bilibili.com"},
+        auth_cookie_names=_BILIBILI_AUTH_COOKIE_NAMES,
     )
 
 
@@ -564,7 +700,7 @@ def _youtube_cookie_status(settings: Settings) -> dict:
         effective_youtube_cookies_file(settings),
         default_youtube_cookies_file(settings),
         {"youtube.com"},
-        auth_cookie_names={"LOGIN_INFO", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"},
+        auth_cookie_names=_YOUTUBE_AUTH_COOKIE_NAMES,
     )
     result["browser_cookie_source"] = settings.youtube_browser_cookie_source
     result["browser_cookie_source_configured"] = bool(settings.youtube_browser_cookie_source.strip())
@@ -606,8 +742,13 @@ def _cookie_status(
     cookie_count, names = _cookie_file_summary(path, allowed_domains)
     result["cookie_count"] = cookie_count
     result["authenticated"] = bool(names.intersection(auth_cookie_names or set()))
-    result["ok"] = cookie_count > 0
-    result["message"] = f"{label} cookies file exists." if result["ok"] else f"{label} cookies file has no matching cookies."
+    result["ok"] = result["authenticated"] if auth_cookie_names else cookie_count > 0
+    if result["ok"]:
+        result["message"] = f"{label} authenticated cookies file exists."
+    elif cookie_count > 0 and auth_cookie_names:
+        result["message"] = f"{label} cookies file does not contain authenticated login cookies."
+    else:
+        result["message"] = f"{label} cookies file has no matching cookies."
     return result
 
 
@@ -930,22 +1071,47 @@ def _open_resource_package(output_dir: Path, raw_path: str) -> dict:
 
 def _open_bilibili_login() -> dict:
     url = "https://passport.bilibili.com/login"
-    opened = webbrowser.open(url, new=2)
+    opened = _open_login_url(url)
     return {
         "ok": bool(opened),
         "url": url,
-        "message": "Opened the Bilibili login page in the default browser. Sign in to Chrome before importing cookies.",
+        "message": "Opened the Bilibili login page. Login state will be imported automatically after sign-in.",
     }
 
 
 def _open_youtube_login() -> dict:
     url = "https://www.youtube.com/"
-    opened = webbrowser.open(url, new=2)
+    opened = _open_login_url(url)
     return {
         "ok": bool(opened),
         "url": url,
-        "message": "Opened YouTube in the default browser. Confirm Chrome is signed in before importing the login state.",
+        "message": "Opened YouTube. Login state will be connected automatically after sign-in.",
     }
+
+
+def _open_login_url(url: str) -> bool:
+    configured_chrome = os.environ.get("EASYSOURCEFLOW_CHROME_PATH", "").strip()
+    if configured_chrome and Path(configured_chrome).expanduser().is_file():
+        try:
+            subprocess.Popen(
+                [str(Path(configured_chrome).expanduser()), url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            logger.warning("configured Chrome could not open login page", exc_info=True)
+    if sys.platform == "darwin" and Path("/Applications/Google Chrome.app").exists():
+        try:
+            subprocess.Popen(
+                ["open", "-a", "Google Chrome", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            logger.warning("Google Chrome could not open login page", exc_info=True)
+    return bool(webbrowser.open(url, new=2))
 
 
 def _import_bilibili_cookies(settings: Settings) -> dict:
@@ -961,8 +1127,12 @@ def _import_bilibili_cookies(settings: Settings) -> dict:
         test_url="https://www.bilibili.com/",
         allowed_domains={"bilibili.com"},
         error_code="bilibili_cookie_import_failed",
+        required_auth_cookie_names=_BILIBILI_AUTH_COOKIE_NAMES,
     )
-    config_file = _write_env_values(_config_file_path(), {"EASYSOURCEFLOW_BILIBILI_COOKIES_FILE": str(cookies_path)})
+    config_file = _write_env_values(
+        _config_file_path(),
+        {"EASYSOURCEFLOW_BILIBILI_COOKIES_FILE": str(cookies_path)},
+    )
     object.__setattr__(settings, "bilibili_cookies_file", str(cookies_path))
     logger.info("bilibili cookies imported path=%s config_file=%s", cookies_path, config_file)
     return {"ok": True, "config_file": str(config_file), "cookies": _bilibili_cookie_status(settings)}
@@ -982,6 +1152,7 @@ def _import_youtube_cookies(settings: Settings) -> dict:
         allowed_domains={"youtube.com"},
         error_code="youtube_cookie_import_failed",
         browser_cookie_source="chrome:Default",
+        required_auth_cookie_names=_YOUTUBE_AUTH_COOKIE_NAMES,
     )
     browser_cookie_source = "chrome:Default"
     config_file = _write_env_values(
@@ -993,8 +1164,76 @@ def _import_youtube_cookies(settings: Settings) -> dict:
     )
     object.__setattr__(settings, "youtube_cookies_file", str(cookies_path))
     object.__setattr__(settings, "youtube_browser_cookie_source", browser_cookie_source)
-    logger.info("youtube browser login configured source=%s snapshot=%s config_file=%s", browser_cookie_source, cookies_path, config_file)
+    logger.info(
+        "youtube browser login configured source=%s snapshot=%s config_file=%s",
+        browser_cookie_source,
+        cookies_path,
+        config_file,
+    )
     return {"ok": True, "config_file": str(config_file), "cookies": _youtube_cookie_status(settings)}
+
+
+def _disconnect_bilibili_login(settings: Settings) -> dict:
+    removed = _remove_managed_cookie_files(
+        settings.bilibili_cookies_file,
+        default_bilibili_cookies_file(settings),
+        settings.data_dir,
+    )
+    config_file = _write_env_values(
+        _config_file_path(),
+        {"EASYSOURCEFLOW_BILIBILI_COOKIES_FILE": ""},
+    )
+    object.__setattr__(settings, "bilibili_cookies_file", "")
+    logger.info("bilibili login disconnected config_file=%s", config_file)
+    return {
+        "ok": True,
+        "message": "Bilibili login was disconnected from EasySourceFlow. Chrome remains signed in.",
+        "cookie_file_removed": removed,
+        "cookies": _bilibili_cookie_status(settings),
+    }
+
+
+def _disconnect_youtube_login(settings: Settings) -> dict:
+    removed = _remove_managed_cookie_files(
+        settings.youtube_cookies_file,
+        default_youtube_cookies_file(settings),
+        settings.data_dir,
+    )
+    config_file = _write_env_values(
+        _config_file_path(),
+        {
+            "EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE": "",
+            "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE": "",
+        },
+    )
+    object.__setattr__(settings, "youtube_cookies_file", "")
+    object.__setattr__(settings, "youtube_browser_cookie_source", "")
+    logger.info("youtube login disconnected config_file=%s", config_file)
+    return {
+        "ok": True,
+        "message": "YouTube login was disconnected from EasySourceFlow. Chrome remains signed in.",
+        "cookie_file_removed": removed,
+        "cookies": _youtube_cookie_status(settings),
+    }
+
+
+def _remove_managed_cookie_files(configured_path: str, default_path: Path, data_dir: Path) -> bool:
+    managed_roots = [data_dir.expanduser().resolve()]
+    if data_dir.parent.name == "launchd":
+        managed_roots.append(data_dir.parent.parent.expanduser().resolve())
+    candidates = {default_path.expanduser().resolve()}
+    if configured_path:
+        configured = Path(configured_path).expanduser().resolve()
+        if any(configured.is_relative_to(root) for root in managed_roots):
+            candidates.add(configured)
+    removed = False
+    for path in candidates:
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            continue
+    return removed
 
 
 def _import_browser_cookies(
@@ -1006,6 +1245,7 @@ def _import_browser_cookies(
     allowed_domains: set[str],
     error_code: str,
     browser_cookie_source: str = "chrome",
+    required_auth_cookie_names: set[str] | None = None,
 ) -> None:
     cookies_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -1042,9 +1282,18 @@ def _import_browser_cookies(
                 f"Timed out while reading {platform} login state from Chrome.",
                 ["Keep Chrome installed and unlocked, then retry the import."],
             ) from exc
-        if completed.returncode != 0:
+        cookie_count = _filter_cookie_file(raw_path, filtered_path, allowed_domains)
+        if cookie_count > 0:
+            if required_auth_cookie_names:
+                _, cookie_names = _cookie_file_summary(filtered_path, allowed_domains)
+                if not cookie_names.intersection(required_auth_cookie_names):
+                    raise _login_not_ready_error(platform)
+            filtered_path.replace(cookies_path)
+        elif completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip().splitlines()[-1:]
             message = detail[0] if detail else f"Could not import {platform} cookies from Chrome."
+            if required_auth_cookie_names and _is_login_pending_error(message):
+                raise _login_not_ready_error(platform)
             raise EasySourceFlowError(
                 error_code,
                 message,
@@ -1054,18 +1303,40 @@ def _import_browser_cookies(
                     "If Chrome cookies are locked, export a Netscape cookies file manually.",
                 ],
             )
-        cookie_count = _filter_cookie_file(raw_path, filtered_path, allowed_domains)
-        if cookie_count <= 0:
+        else:
+            if required_auth_cookie_names:
+                raise _login_not_ready_error(platform)
             raise EasySourceFlowError(
                 error_code,
                 f"Chrome did not provide any {platform} cookies.",
                 [f"Open {platform} in Chrome, sign in, and retry the import."],
             )
-        filtered_path.replace(cookies_path)
     try:
         cookies_path.chmod(0o600)
     except OSError:
         logger.debug("could not chmod cookies file platform=%s", platform, exc_info=True)
+
+
+def _is_login_pending_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "sign in to confirm",
+            "login required",
+            "authentication required",
+            "use --cookies",
+            "请先登录",
+        )
+    )
+
+
+def _login_not_ready_error(platform: str) -> EasySourceFlowError:
+    return EasySourceFlowError(
+        f"{platform.lower()}_login_not_ready",
+        f"{platform} login has not been detected yet.",
+        [f"Complete the {platform} login in Chrome; EasySourceFlow will keep checking automatically."],
+    )
 
 
 def _filter_cookie_file(source: Path, destination: Path, allowed_domains: set[str]) -> int:
@@ -1142,29 +1413,30 @@ def _config_file_path() -> Path:
 
 
 def _write_env_values(path: Path, values: dict[str, str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    remaining = dict(values)
-    updated: list[str] = []
-    for raw in lines:
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#") or "=" not in raw:
-            updated.append(raw)
-            continue
-        key = raw.split("=", 1)[0].strip()
-        if key in remaining:
-            updated.append(_env_line(key, remaining.pop(key)))
-        else:
-            updated.append(raw)
-    if remaining and updated and updated[-1].strip():
-        updated.append("")
-    for key, value in remaining.items():
-        updated.append(_env_line(key, value))
-    path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        logger.debug("could not chmod config file", exc_info=True)
+    with _CONFIG_FILE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        remaining = dict(values)
+        updated: list[str] = []
+        for raw in lines:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#") or "=" not in raw:
+                updated.append(raw)
+                continue
+            key = raw.split("=", 1)[0].strip()
+            if key in remaining:
+                updated.append(_env_line(key, remaining.pop(key)))
+            else:
+                updated.append(raw)
+        if remaining and updated and updated[-1].strip():
+            updated.append("")
+        for key, value in remaining.items():
+            updated.append(_env_line(key, value))
+        path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            logger.debug("could not chmod config file", exc_info=True)
     return path
 
 

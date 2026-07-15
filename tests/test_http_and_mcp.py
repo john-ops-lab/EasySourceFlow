@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 from easysourceflow_core import __version__
 from easysourceflow_core.config import Settings
-from easysourceflow_core.http_api import _open_resource_package, build_server
+from easysourceflow_core.http_api import _open_resource_package, _remove_managed_cookie_files, build_server
 from easysourceflow_mcp.server import (
     _favorite_result,
     _format_payload,
@@ -69,6 +70,26 @@ def start_server(server):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return thread
+
+
+class CookieFileCleanupTests(unittest.TestCase):
+    def test_removes_legacy_launchd_cookie_file_but_keeps_external_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_root = Path(tmp) / "easysourceflow"
+            data_dir = app_root / "launchd" / "data"
+            default_path = data_dir / "secrets" / "bilibili-cookies.txt"
+            legacy_path = app_root / "secrets" / "bilibili-cookies.txt"
+            external_path = Path(tmp) / "external" / "bilibili-cookies.txt"
+            for path in (default_path, legacy_path, external_path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("test", encoding="utf-8")
+
+            self.assertTrue(_remove_managed_cookie_files(str(legacy_path), default_path, data_dir))
+            self.assertFalse(default_path.exists())
+            self.assertFalse(legacy_path.exists())
+
+            self.assertFalse(_remove_managed_cookie_files(str(external_path), default_path, data_dir))
+            self.assertTrue(external_path.exists())
 
 
 class HttpAndMcpTests(unittest.TestCase):
@@ -419,10 +440,10 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY=", config_file.read_text(encoding="utf-8"))
                     self.assertIn("DEEPSEEK_API_KEY=", config_file.read_text(encoding="utf-8"))
 
-                    with patch("easysourceflow_core.http_api.webbrowser.open", return_value=True):
+                    with patch("easysourceflow_core.http_api._open_login_url", return_value=True):
                         open_request = Request(
                             f"http://127.0.0.1:{api_server.server_port}/bilibili/login/open",
-                            data=b"{}",
+                            data=json.dumps({"auto_import": False}).encode("utf-8"),
                             headers={"content-type": "application/json"},
                             method="POST",
                         )
@@ -443,11 +464,16 @@ class HttpAndMcpTests(unittest.TestCase):
                         else:
                             cookies_path.write_text(
                                 "# Netscape HTTP Cookie File\n"
-                                ".bilibili.com\tTRUE\t/\tFALSE\t0\tFAKE_COOKIE\ttest\n"
+                                ".bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tBILIBILI_TEST_VALUE\n"
                                 ".example.com\tTRUE\t/\tFALSE\t0\tUNRELATED\tSHOULD_NOT_PERSIST\n",
                                 encoding="utf-8",
                             )
-                        return subprocess.CompletedProcess(command, 0, "", "")
+                        return subprocess.CompletedProcess(
+                            command,
+                            0 if "youtube.com" in command[-1] else 1,
+                            "",
+                            "" if "youtube.com" in command[-1] else "ERROR: Unsupported URL: https://www.bilibili.com/",
+                        )
 
                     with patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_run):
                         import_request = Request(
@@ -460,11 +486,38 @@ class HttpAndMcpTests(unittest.TestCase):
                             imported = json.loads(response.read().decode("utf-8"))
                     self.assertTrue(imported["ok"])
                     self.assertTrue(imported["cookies"]["ok"])
+                    self.assertTrue(imported["cookies"]["authenticated"])
                     self.assertIn("EASYSOURCEFLOW_BILIBILI_COOKIES_FILE=", config_file.read_text(encoding="utf-8"))
-                    self.assertNotIn("FAKE_COOKIE", json.dumps(imported, ensure_ascii=False))
+                    self.assertNotIn("BILIBILI_TEST_VALUE", json.dumps(imported, ensure_ascii=False))
                     bilibili_cookie_text = Path(settings.bilibili_cookies_file).read_text(encoding="utf-8")
                     self.assertIn(".bilibili.com", bilibili_cookie_text)
                     self.assertNotIn(".example.com", bilibili_cookie_text)
+
+                    def fake_anonymous_run(command, **_kwargs):
+                        cookies_path = Path(command[command.index("--cookies") + 1])
+                        cookies_path.parent.mkdir(parents=True, exist_ok=True)
+                        cookies_path.write_text(
+                            "# Netscape HTTP Cookie File\n"
+                            ".bilibili.com\tTRUE\t/\tFALSE\t0\tbuvid3\tANONYMOUS_VALUE\n",
+                            encoding="utf-8",
+                        )
+                        return subprocess.CompletedProcess(command, 0, "", "")
+
+                    with patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_anonymous_run):
+                        anonymous_request = Request(
+                            f"http://127.0.0.1:{api_server.server_port}/cookies/bilibili/import",
+                            data=b"{}",
+                            headers={"content-type": "application/json"},
+                            method="POST",
+                        )
+                        with self.assertRaises(HTTPError) as raised:
+                            urlopen(anonymous_request, timeout=10)
+                    anonymous_error = json.loads(raised.exception.read().decode("utf-8"))
+                    self.assertEqual(anonymous_error["error"]["code"], "bilibili_login_not_ready")
+                    self.assertEqual(
+                        Path(settings.bilibili_cookies_file).read_text(encoding="utf-8"),
+                        bilibili_cookie_text,
+                    )
 
                     with patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_run):
                         youtube_request = Request(
@@ -490,6 +543,115 @@ class HttpAndMcpTests(unittest.TestCase):
                     youtube_cookie_text = Path(settings.youtube_cookies_file).read_text(encoding="utf-8")
                     self.assertIn(".youtube.com", youtube_cookie_text)
                     self.assertNotIn(".example.com", youtube_cookie_text)
+
+                    automatic_attempts = {"youtube": 0}
+
+                    def fake_automatic_run(command, **kwargs):
+                        if "youtube.com" in command[-1] and automatic_attempts["youtube"] == 0:
+                            automatic_attempts["youtube"] += 1
+                            return subprocess.CompletedProcess(
+                                command,
+                                1,
+                                "",
+                                "Sign in to confirm you’re not a bot. Use --cookies",
+                            )
+                        return fake_run(command, **kwargs)
+
+                    with (
+                        patch("easysourceflow_core.http_api._open_login_url", return_value=True),
+                        patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_automatic_run),
+                        patch("easysourceflow_core.http_api._LOGIN_AUTO_IMPORT_RETRY_SECONDS", (0.01,)),
+                    ):
+                        for platform in ("bilibili", "youtube"):
+                            automatic_request = Request(
+                                f"http://127.0.0.1:{api_server.server_port}/{platform}/login/open",
+                                data=b"{}",
+                                headers={"content-type": "application/json"},
+                                method="POST",
+                            )
+                            with urlopen(automatic_request, timeout=10) as response:
+                                automatic = json.loads(response.read().decode("utf-8"))
+                            self.assertIn(
+                                automatic["auto_import"]["status"],
+                                {"waiting", "importing", "succeeded"},
+                            )
+
+                            deadline = time.monotonic() + 5
+                            while time.monotonic() < deadline:
+                                with urlopen(
+                                    f"http://127.0.0.1:{api_server.server_port}/cookies/{platform}", timeout=10
+                                ) as response:
+                                    status = json.loads(response.read().decode("utf-8"))
+                                if status["auto_import"]["status"] == "succeeded":
+                                    break
+                                time.sleep(0.05)
+                            self.assertEqual(status["auto_import"]["status"], "succeeded")
+                            self.assertTrue(status["authenticated"])
+                    self.assertEqual(automatic_attempts["youtube"], 1)
+
+                    managed_cookie_paths = {
+                        "bilibili": Path(settings.bilibili_cookies_file),
+                        "youtube": Path(settings.youtube_cookies_file),
+                    }
+                    for platform in ("bilibili", "youtube"):
+                        logout_request = Request(
+                            f"http://127.0.0.1:{api_server.server_port}/cookies/{platform}/logout",
+                            data=b"{}",
+                            headers={"content-type": "application/json"},
+                            method="POST",
+                        )
+                        with urlopen(logout_request, timeout=10) as response:
+                            logged_out = json.loads(response.read().decode("utf-8"))
+                        self.assertTrue(logged_out["ok"])
+                        self.assertFalse(logged_out["cookies"]["ok"])
+                        self.assertEqual(logged_out["auto_import"]["status"], "idle")
+                        self.assertFalse(managed_cookie_paths[platform].exists())
+                    logged_out_config = config_file.read_text(encoding="utf-8")
+                    self.assertIn("EASYSOURCEFLOW_BILIBILI_COOKIES_FILE=\n", logged_out_config)
+                    self.assertIn("EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE=\n", logged_out_config)
+                    self.assertIn("EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE=\n", logged_out_config)
+                    self.assertEqual(settings.bilibili_cookies_file, "")
+                    self.assertEqual(settings.youtube_cookies_file, "")
+                    self.assertEqual(settings.youtube_browser_cookie_source, "")
+
+                    with (
+                        patch("easysourceflow_core.http_api._open_login_url", return_value=True),
+                        patch("easysourceflow_core.http_api.subprocess.run", side_effect=fake_anonymous_run),
+                        patch("easysourceflow_core.http_api._LOGIN_AUTO_IMPORT_RETRY_SECONDS", (1,)),
+                    ):
+                        pending_request = Request(
+                            f"http://127.0.0.1:{api_server.server_port}/bilibili/login/open",
+                            data=b"{}",
+                            headers={"content-type": "application/json"},
+                            method="POST",
+                        )
+                        with urlopen(pending_request, timeout=10):
+                            pass
+                        deadline = time.monotonic() + 2
+                        while time.monotonic() < deadline:
+                            with urlopen(
+                                f"http://127.0.0.1:{api_server.server_port}/cookies/bilibili", timeout=10
+                            ) as response:
+                                pending = json.loads(response.read().decode("utf-8"))
+                            if pending["auto_import"]["status"] == "waiting" and pending["auto_import"]["attempts"]:
+                                break
+                            time.sleep(0.02)
+                        self.assertEqual(pending["auto_import"]["status"], "waiting")
+                        logout_pending_request = Request(
+                            f"http://127.0.0.1:{api_server.server_port}/cookies/bilibili/logout",
+                            data=b"{}",
+                            headers={"content-type": "application/json"},
+                            method="POST",
+                        )
+                        with urlopen(logout_pending_request, timeout=10) as response:
+                            cancelled = json.loads(response.read().decode("utf-8"))
+                        self.assertEqual(cancelled["auto_import"]["status"], "idle")
+                        time.sleep(0.05)
+                        with urlopen(
+                            f"http://127.0.0.1:{api_server.server_port}/cookies/bilibili", timeout=10
+                        ) as response:
+                            after_cancel = json.loads(response.read().decode("utf-8"))
+                        self.assertEqual(after_cancel["auto_import"]["status"], "idle")
                 finally:
                     api_server.shutdown()
                     api_server.server_close()

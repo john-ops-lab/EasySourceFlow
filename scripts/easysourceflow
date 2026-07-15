@@ -287,16 +287,29 @@ sync_runtime() {
   rsync -a --delete "${ROOT_DIR}/src/" "${RUNTIME_SRC}/"
   if [[ -f "${ROOT_DIR}/.env" ]]; then
     if [[ -f "${RUNTIME_ENV}" ]]; then
-      local runtime_only_values
+      local runtime_only_values merged_env
       runtime_only_values="$(mktemp "${RUNTIME_DIR}/runtime-env-extra.XXXXXX")"
+      merged_env="$(mktemp "${RUNTIME_DIR}/runtime-env-merged.XXXXXX")"
       awk -F= '
+        function web_managed(key) {
+          return key == "EASYSOURCEFLOW_BILIBILI_COOKIES_FILE" ||
+            key == "EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE" ||
+            key == "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE"
+        }
         NR == FNR {
           if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) seen[$1] = 1
           next
         }
-        $0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && !($1 in seen) { print }
+        $0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && (!($1 in seen) || web_managed($1)) { print }
       ' "${ROOT_DIR}/.env" "${RUNTIME_ENV}" >"${runtime_only_values}"
-      cp "${ROOT_DIR}/.env" "${RUNTIME_ENV}"
+      awk -F= '
+        NR == FNR {
+          if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) replaced[$1] = 1
+          next
+        }
+        !($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && ($1 in replaced)) { print }
+      ' "${runtime_only_values}" "${ROOT_DIR}/.env" >"${merged_env}"
+      mv "${merged_env}" "${RUNTIME_ENV}"
       if [[ -s "${runtime_only_values}" ]]; then
         printf '\n# Values managed by the local Web console.\n' >>"${RUNTIME_ENV}"
         cat "${runtime_only_values}" >>"${RUNTIME_ENV}"
