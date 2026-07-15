@@ -19,11 +19,16 @@ Codex / OpenClaw / other MCP clients
 
 必须：
 
-- Python 3.9 或更新版本。
+- Python 3.10 或更新版本。
 - SQLite。
 - 模型 API key。
 - `yt-dlp`。
 - `ffmpeg`。
+
+YouTube 还需要：
+
+- Deno 2.3+（推荐）或 Node.js 22+。
+- 与当前 `yt-dlp` 匹配的 EJS 包；项目通过 `yt-dlp[default]` 自动安装。
 
 视频转写需要：
 
@@ -63,6 +68,12 @@ Codex / OpenClaw / other MCP clients
 
 ```text
 ~/.local/share/easysourceflow/output
+```
+
+Web 音视频下载目录：
+
+```text
+~/.local/share/easysourceflow/media-downloads
 ```
 
 B 站 cookies 和 Whisper 模型可以放在用户数据目录：
@@ -164,6 +175,10 @@ scripts/easysourceflow uninstall-launchd
 ```
 
 该目录会保存同步后的源码、专用虚拟环境、数据库和输出目录。脚本会在 plist 中写入 `PYTHONPATH`、配置文件路径、输出路径、`yt-dlp`、`ffmpeg` 和 `whisper-cli` 的实际路径，避免依赖登录 shell 的环境。
+
+从 v0.2.x 升级时，`sync-runtime` 会检测旧 Python 3.9 虚拟环境并使用当前 Python 3.10+ 重建。重建后运行 `scripts/easysourceflow install-launchd`，让 plist 同步新的解释器和 site-packages 路径。
+
+`sync-runtime` 会刷新项目源码和 `.env` 中的配置，同时保留只存在于 launchd `runtime.env` 中、由本地 Web 控制台写入的配置项，例如 YouTube Chrome 实时登录态来源。
 
 ## 8. MCP 配置
 

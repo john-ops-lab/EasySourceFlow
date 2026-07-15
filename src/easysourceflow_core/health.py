@@ -130,6 +130,13 @@ def _check_bilibili_cookies(settings: Settings) -> dict:
 
 
 def _check_youtube_cookies(settings: Settings) -> dict:
+    if settings.youtube_browser_cookie_source.strip():
+        return _result(
+            "youtube_cookies",
+            True,
+            "Live Chrome login state is configured for YouTube.",
+            required=False,
+        )
     cookies_file = effective_youtube_cookies_file(settings)
     if not cookies_file:
         return _result(

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-EasySourceFlow is a Python 3.9+ local content summarization service with HTTP, Web UI, and MCP entry points.
+EasySourceFlow is a Python 3.10+ local content summarization service with HTTP, Web UI, and MCP entry points.
 
 - `src/easysourceflow_core/`: core daemon, HTTP API, Web UI, extractors, digest generation, SQLite store, output writing, backup, cleanup, and maintenance logic.
 - `src/easysourceflow_core/extractors/`: source-specific extraction for web pages, WeChat articles, and video platforms.

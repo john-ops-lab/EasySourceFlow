@@ -299,9 +299,20 @@ class JobStore:
         job = self.get_job(job_id)
         return bool(job and job.get("status") == "canceled")
 
-    def status_counts(self) -> dict:
+    def status_counts(self, request_kind: Optional[str] = None, exclude_request_kind: Optional[str] = None) -> dict:
         with self.connect() as conn:
-            rows = conn.execute("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").fetchall()
+            if request_kind:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) AS count FROM jobs WHERE request_kind = ? GROUP BY status",
+                    (request_kind,),
+                ).fetchall()
+            elif exclude_request_kind:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) AS count FROM jobs WHERE request_kind != ? GROUP BY status",
+                    (exclude_request_kind,),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").fetchall()
         return {row["status"]: row["count"] for row in rows}
 
     def prepare_recoverable_jobs(self) -> List[dict]:
@@ -397,10 +408,36 @@ class JobStore:
             row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return _row_to_dict(row) if row else None
 
-    def list_jobs(self, limit: int = 20, status: Optional[str] = None) -> List[dict]:
+    def list_jobs(
+        self,
+        limit: int = 20,
+        status: Optional[str] = None,
+        request_kind: Optional[str] = None,
+        exclude_request_kind: Optional[str] = None,
+    ) -> List[dict]:
         limit = max(1, min(limit, 100))
         with self.connect() as conn:
-            if status:
+            if status and request_kind:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE status = ? AND request_kind = ? ORDER BY created_at DESC LIMIT ?",
+                    (status, request_kind, limit),
+                ).fetchall()
+            elif status and exclude_request_kind:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE status = ? AND request_kind != ? ORDER BY created_at DESC LIMIT ?",
+                    (status, exclude_request_kind, limit),
+                ).fetchall()
+            elif request_kind:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE request_kind = ? ORDER BY created_at DESC LIMIT ?",
+                    (request_kind, limit),
+                ).fetchall()
+            elif exclude_request_kind:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE request_kind != ? ORDER BY created_at DESC LIMIT ?",
+                    (exclude_request_kind, limit),
+                ).fetchall()
+            elif status:
                 rows = conn.execute(
                     "SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT ?",
                     (status, limit),

@@ -7,6 +7,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from base64 import b64encode
 from unittest.mock import patch
@@ -71,6 +72,121 @@ def start_server(server):
 
 
 class HttpAndMcpTests(unittest.TestCase):
+    def test_web_media_download_is_persistent_and_not_an_mcp_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(
+                host="127.0.0.1",
+                port=0,
+                data_dir=root / "data",
+                database_path=root / "jobs.sqlite3",
+                output_dir=root / "output",
+                allow_local_urls=False,
+                request_timeout_seconds=2,
+                max_content_chars=10000,
+                ytdlp_path="",
+                bilibili_cookies_file="",
+                youtube_cookies_file="",
+                youtube_extractor_args="",
+                ffmpeg_path="ffmpeg",
+                whisper_cli_path="whisper-cli",
+                whisper_model_path="",
+                transcription_backend="whisper_cpp",
+                mlx_whisper_path="mlx_whisper",
+                faster_whisper_path="faster-whisper",
+                max_transcription_seconds=7200,
+                model_provider="local",
+                model="local-extractive",
+                strong_model="local-extractive",
+                deepseek_api_key="",
+                deepseek_base_url="https://example.com",
+            )
+
+            def fake_download(url, media_type, format_name, settings, destination, progress_callback=None, cancel_check=None):
+                destination.mkdir(parents=True, exist_ok=True)
+                path = destination / "示例音频.mp3"
+                path.write_bytes(b"test-media")
+                if progress_callback:
+                    progress_callback("downloading", 0.75)
+                return {
+                    "operation": "media_download",
+                    "source_url": url,
+                    "canonical_url": url,
+                    "source_type": "youtube",
+                    "media_type": media_type,
+                    "format": format_name,
+                    "title": "示例音频",
+                    "file_path": str(path.resolve()),
+                    "file_name": path.name,
+                    "file_size": path.stat().st_size,
+                }
+
+            with patch("easysourceflow_core.service.download_media", side_effect=fake_download):
+                api_server = build_server(settings)
+                start_server(api_server)
+                base_url = f"http://127.0.0.1:{api_server.server_port}"
+                try:
+                    request = Request(
+                        f"{base_url}/downloads",
+                        data=json.dumps(
+                            {
+                                "url": "https://www.youtube.com/watch?v=example",
+                                "media_type": "audio",
+                                "format": "mp3",
+                            }
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(request, timeout=10) as response:
+                        submitted = json.loads(response.read().decode("utf-8"))
+                    job_id = submitted["job_id"]
+                    completed = None
+                    for _ in range(50):
+                        with urlopen(f"{base_url}/downloads/{job_id}", timeout=10) as response:
+                            completed = json.loads(response.read().decode("utf-8"))
+                        if completed["status"] == "succeeded":
+                            break
+                        threading.Event().wait(0.02)
+                    self.assertEqual(completed["status"], "succeeded")
+
+                    with urlopen(f"{base_url}/downloads/{job_id}/file", timeout=10) as response:
+                        self.assertEqual(response.read(), b"test-media")
+                        self.assertIn("attachment", response.headers["content-disposition"])
+                        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+
+                    with urlopen(f"{base_url}/jobs?limit=20", timeout=10) as response:
+                        jobs = json.loads(response.read().decode("utf-8"))
+                    self.assertFalse(any(job["job_id"] == job_id for job in jobs["items"]))
+
+                    generic_retry = Request(
+                        f"{base_url}/jobs/{job_id}/retry",
+                        data=b"{}",
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as context:
+                        urlopen(generic_retry, timeout=10)
+                    self.assertEqual(context.exception.code, 404)
+                    context.exception.close()
+
+                    web_retry = Request(
+                        f"{base_url}/downloads/{job_id}/retry",
+                        data=b"{}",
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(web_retry, timeout=10) as response:
+                        retried = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(retried["request_kind"], "media_download")
+                    self.assertNotEqual(retried["job_id"], job_id)
+                finally:
+                    api_server.shutdown()
+                    api_server.server_close()
+
+        tools = handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
+        self.assertFalse(any("download" in tool["name"] for tool in tools))
+
     def test_http_api_updates_prompt_and_tracks_real_mcp_activity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -343,8 +459,14 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertTrue(youtube_imported["ok"])
                     self.assertTrue(youtube_imported["cookies"]["ok"])
                     self.assertTrue(youtube_imported["cookies"]["authenticated"])
+                    self.assertTrue(youtube_imported["cookies"]["browser_cookie_source_configured"])
+                    self.assertEqual(youtube_imported["cookies"]["browser_cookie_source"], "chrome:Default")
                     self.assertEqual(youtube_imported["cookies"]["cookie_count"], 1)
                     self.assertIn("EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE=", config_file.read_text(encoding="utf-8"))
+                    self.assertIn(
+                        "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE=chrome:Default",
+                        config_file.read_text(encoding="utf-8"),
+                    )
                     self.assertNotIn("YOUTUBE_TEST_VALUE", json.dumps(youtube_imported, ensure_ascii=False))
                     youtube_cookie_text = Path(settings.youtube_cookies_file).read_text(encoding="utf-8")
                     self.assertIn(".youtube.com", youtube_cookie_text)

@@ -11,6 +11,8 @@
 
 当前没有 Obsidian 保存工具。
 
+Web 音视频下载也不属于 MCP 能力。Agent 工具不会创建、列出或交付 `media_download` 任务；下载只能由本机 Web 页面发起。
+
 ## 2. 工具列表
 
 ### 2.1 `easysourceflow_summarize_link`

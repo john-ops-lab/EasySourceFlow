@@ -29,6 +29,9 @@ flowchart TD
     Video --> Transcribe["Whisper transcription fallback"]
     Service --> Digest["OpenAI-compatible digest"]
     Service --> Output["Markdown output and video resource package"]
+    UI --> Media["Web-only media download"]
+    Media --> YTDLP
+    Media --> MediaFiles["data/media-downloads"]
 ```
 
 ## 3. 组件
@@ -36,6 +39,8 @@ flowchart TD
 ### 3.1 Agent
 
 Agent 负责理解用户自然语言，并决定调用哪个 MCP 工具。Agent 不直接处理网页抓取、视频下载、转写、文件路径等底层细节。
+
+这里的“视频下载”不包含 Web 专用媒体保存功能。MCP 不暴露下载工具，Agent 不能创建或列出 `media_download` 任务。
 
 ### 3.2 `easysourceflow_mcp`
 
@@ -58,6 +63,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 - 调用提取器、总结器和输出写入器。
 - 运行健康检查。
 - 清理旧输出和临时文件。
+- 为本机 Web 创建、查询和交付受控音视频下载任务。
 
 ### 3.4 Extractors
 
@@ -66,7 +72,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 - 普通网页: 本地 HTTP 抓取、正文抽取、OpenGraph / JSON-LD / metadata 辅助。
 - 微信公众号: 专用 DOM 和脚本变量提取，支持懒加载图片和 Playwright / Chrome 兜底。
 - B 站: `yt-dlp` 元数据、平台字幕接口、cookies 文件、音频转写兜底。
-- YouTube: `yt-dlp` 元数据、Chrome 登录态文件、人工/自动字幕优先级、本地 ASR 兜底和平台错误分类。
+- YouTube: `yt-dlp` 元数据、Chrome 实时登录态、人工/自动字幕优先级、本地 ASR 兜底和平台错误分类。
 
 ### 3.5 Transcription fallback
 
@@ -96,6 +102,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 - 错误信息。
 - 可恢复请求参数和强制刷新标记。
 - 输出文档增量索引；运行环境不支持 FTS5 时回退到普通索引查询。
+- Web 音视频下载任务及其受控选项；普通任务列表和 MCP 列表会过滤该类型。
 
 数据库使用 `PRAGMA user_version` 逐版本迁移。启动时，可重放的 `queued` / `running` 任务会恢复到队列；缺少持久化输入的旧任务才会标记为 `interrupted`。
 
@@ -151,6 +158,18 @@ Agent calls easysourceflow_get_batch
   -> MCP GET /batches/{batch_id}
   -> service returns counts and per-job summary
 ```
+
+### 4.4 Web 音视频下载
+
+```text
+Web POST /downloads
+  -> service creates media_download job
+  -> yt-dlp downloads one Bilibili/YouTube item
+  -> FFmpeg optionally merges or converts
+  -> GET /downloads/{job_id}/file returns an attachment
+```
+
+文件只写入 `EASYSOURCEFLOW_DATA_DIR/media-downloads/<job_id>/`。服务校验最终路径仍在该根目录内；MCP 没有对应工具。
 
 ## 5. 内部数据模型
 

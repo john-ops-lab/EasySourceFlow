@@ -67,7 +67,7 @@ Before publishing a release:
 1. Update `__version__` and the version badge in `README.md`.
 2. Add a dated entry to `CHANGELOG.md` and update the matching milestone in `docs/ROADMAP.md`.
 3. Run all release checks and commit the release changes.
-4. Create an annotated tag such as `git tag -a v0.2.0 -m "EasySourceFlow v0.2.0"`.
+4. Create an annotated tag such as `git tag -a vX.Y.Z -m "EasySourceFlow vX.Y.Z"`.
 5. Push the commit and tag, then create a GitHub Release from that tag.
 6. Verify that the Release page, tag, changelog, and CI all show the same version.
 

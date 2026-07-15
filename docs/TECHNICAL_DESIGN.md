@@ -35,6 +35,7 @@
 │       ├── errors.py
 │       ├── health.py
 │       ├── http_api.py
+│       ├── media_download.py
 │       ├── models.py
 │       ├── output.py
 │       ├── service.py
@@ -165,13 +166,19 @@ yt-dlp audio
   -> summary
 ```
 
-默认不下载完整视频。
+总结和 ASR 流程默认不保存完整视频；完整媒体只由 Web 下载页显式触发。
 
-### 8.4 YouTube
+### 8.4 Web 专用音视频下载
+
+Web 的 `/downloads` 接口创建 `request_kind=media_download` 的持久化任务。只接受 Bilibili/YouTube 单视频链接和固定白名单选项：视频为 1080p、720p、最高画质；音频为 MP3、M4A、原始音频。
+
+子进程始终使用参数数组，并固定启用 `--no-playlist`、`--no-overwrites`、受控输出模板和专用任务目录。完成后校验文件仍位于 `EASYSOURCEFLOW_DATA_DIR/media-downloads/<job_id>/`。YouTube 使用 `yt-dlp[default]` 的 EJS 包及 Deno/Node 挑战求解；该接口不进入 MCP 工具表。
+
+### 8.5 YouTube
 
 YouTube 使用独立字幕选择流程：优先人工中文字幕，其次其他人工字幕；没有人工字幕时优先原语言自动字幕，再尝试其他自动字幕。只有平台字幕均不可用时才下载音频进入本地 ASR。
 
-Web 可以从本机 Chrome 导入登录态。导入过程只保留 `youtube.com` 域 Cookie，使用私有临时文件和原子替换写入数据目录。PO Token 不内置生成器；当 yt-dlp 明确要求时，通过当前受支持的 provider 或 `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS` 配置。
+Web 可以接入本机 Chrome 登录态。接入时生成只含 `youtube.com` 域的私有状态快照，但任务执行优先使用 `EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE` 直接读取当前 Chrome 配置档，避免普通会话 Cookie 轮换后继续复用失效文件。PO Token 不内置生成器；当 yt-dlp 明确要求时，通过当前受支持的 provider 或 `EASYSOURCEFLOW_YOUTUBE_EXTRACTOR_ARGS` 配置。
 
 ## 9. 总结策略
 

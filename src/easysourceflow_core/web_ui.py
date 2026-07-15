@@ -966,6 +966,32 @@ INDEX_HTML = """<!doctype html>
       background: var(--pink);
       font-size: 15px;
     }
+    #download-panel { max-width: 1080px; }
+    .download-card { max-width: 760px; margin: 0 0 36px; }
+    .download-form { padding: 22px; }
+    .download-url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .download-url-row input { min-height: 46px; font-size: 15px; }
+    .download-options { display: flex; flex-wrap: wrap; align-items: end; gap: 18px; margin-top: 18px; }
+    .download-option { display: grid; gap: 7px; }
+    .download-type-toggle { display: inline-flex; }
+    .download-type-toggle input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+    .download-type-toggle label {
+      min-width: 88px;
+      min-height: 38px;
+      display: grid;
+      place-items: center;
+      padding: 7px 16px;
+      border: 1px solid #d3d3d3;
+      background: #fff;
+      cursor: pointer;
+    }
+    .download-type-toggle label:first-of-type { border-radius: 6px 0 0 6px; }
+    .download-type-toggle label:last-of-type { margin-left: -1px; border-radius: 0 6px 6px 0; }
+    .download-type-toggle input:checked + label { z-index: 1; color: var(--pink); border-color: var(--pink); }
+    #download-format { min-width: 170px; min-height: 38px; }
+    #download-submit-button { min-width: 126px; min-height: 46px; background: var(--pink); border-color: var(--pink); }
+    .download-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .download-progress { width: 100%; height: 5px; margin-top: 10px; accent-color: var(--pink); }
     #config-save-button { background: var(--pink); border-color: var(--pink); }
     #config-save-button:hover { background: #cc0000; border-color: #cc0000; }
     button { border-radius: 6px; background: var(--ink); border-color: var(--ink); }
@@ -1134,7 +1160,7 @@ INDEX_HTML = """<!doctype html>
         background: rgba(255,255,255,.98);
       }
       .brand, .sidebar-actions { display: none; }
-      .nav-list { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; }
+      .nav-list { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
       .tab-button {
         min-height: 54px;
         padding: 5px 2px;
@@ -1163,6 +1189,13 @@ INDEX_HTML = """<!doctype html>
       .composer-body textarea { min-height: 130px; }
       .composer-submit-row { align-items: stretch; flex-direction: column; gap: 8px; }
       #submit-button, #file-submit-button { width: 100%; }
+      .download-card { margin-bottom: 28px; }
+      .download-form { padding: 16px; }
+      .download-url-row { grid-template-columns: 1fr; }
+      .download-options { align-items: stretch; gap: 12px; }
+      .download-option, #download-format, #download-submit-button { width: 100%; }
+      .download-type-toggle { display: flex; }
+      .download-type-toggle label { flex: 1; }
       .filters, .compact-grid, .settings-grid, .task-layout, .control-row, .retry-editor .retry-row { grid-template-columns: 1fr; }
       #fulltext-button { margin: 0 0 18px; width: 100%; }
       .maintenance-nav { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: max-content; }
@@ -1186,6 +1219,7 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="nav-list" role="tablist" aria-label="工作区">
         <button class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="submit-panel" data-tab="submit-panel"><span class="nav-icon" aria-hidden="true">＋</span><span>新总结</span></button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="download-panel" data-tab="download-panel"><span class="nav-icon" aria-hidden="true">↓</span><span>音视频下载</span></button>
         <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="outputs-panel" data-tab="outputs-panel"><span class="nav-icon" aria-hidden="true">▤</span><span>结果库</span></button>
         <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="favorites-panel" data-tab="favorites-panel"><span class="nav-icon" aria-hidden="true">☆</span><span>收藏夹</span></button>
         <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="search-panel" data-tab="search-panel"><span class="nav-icon" aria-hidden="true">⌕</span><span>全局搜索</span></button>
@@ -1265,6 +1299,37 @@ INDEX_HTML = """<!doctype html>
         </section>
         <div id="submit-secondary-panels"></div>
       </div>
+
+      <section id="download-panel" class="workspace-page">
+        <header class="page-header"><div><h2>音视频下载</h2><p>下载 Bilibili 或 YouTube 的单个视频、视频音轨。</p></div></header>
+        <section class="primary-card download-card">
+          <form id="download-form" class="download-form">
+            <div class="download-url-row">
+              <input id="download-url" type="url" autocomplete="off" spellcheck="false" placeholder="粘贴 Bilibili 或 YouTube 链接" aria-label="音视频链接">
+              <button id="download-submit-button" type="submit">开始下载</button>
+            </div>
+            <div class="download-options">
+              <div class="download-option">
+                <label>下载内容</label>
+                <div class="download-type-toggle" role="radiogroup" aria-label="下载内容">
+                  <input id="download-type-video" name="download-type" type="radio" value="video" checked>
+                  <label for="download-type-video">视频</label>
+                  <input id="download-type-audio" name="download-type" type="radio" value="audio">
+                  <label for="download-type-audio">音频</label>
+                </div>
+              </div>
+              <div class="download-option">
+                <label id="download-format-label" for="download-format">清晰度</label>
+                <select id="download-format"></select>
+              </div>
+            </div>
+            <p class="download-note">仅下载你有权保存的内容；不会下载播放列表，也不会绕过付费或 DRM 限制。MP3、M4A 转换以及分离音视频合并需要 FFmpeg。</p>
+            <div class="status-line" id="download-status" role="status" aria-live="polite"></div>
+          </form>
+        </section>
+        <div class="section-title"><div><h3>最近下载</h3><div class="status-line" id="download-queue-status"></div></div></div>
+        <div class="list" id="downloads"></div>
+      </section>
 
       <section id="tasks-panel" class="workspace-page">
         <div class="section-title">
@@ -1387,7 +1452,7 @@ INDEX_HTML = """<!doctype html>
             <div class="meta" id="youtube-account-status">读取状态中</div>
             <div class="actions">
               <button class="secondary" id="youtube-open-login-button" type="button">打开 YouTube</button>
-              <button class="secondary" id="youtube-import-button" type="button">导入 Chrome 登录态</button>
+              <button class="secondary" id="youtube-import-button" type="button">接入 Chrome 实时登录态</button>
             </div>
             <div class="status-line" id="youtube-action-status"></div>
           </div>
@@ -1542,7 +1607,7 @@ INDEX_HTML = """<!doctype html>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <script>
-    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, promptDirty: false, prompt: null, agent: null, model: null, modelServices: [], initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
+    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, promptDirty: false, prompt: null, agent: null, model: null, modelServices: [], initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1554,6 +1619,7 @@ INDEX_HTML = """<!doctype html>
 
     const panelRoutes = {
       'submit-panel': 'new',
+      'download-panel': 'downloads',
       'outputs-panel': 'results',
       'favorites-panel': 'favorites',
       'search-panel': 'search',
@@ -1767,6 +1833,123 @@ INDEX_HTML = """<!doctype html>
 
     function selectedSummaryQuality() {
       return document.querySelector('input[name="summary-quality"]:checked')?.value || 'fast';
+    }
+
+    function selectedDownloadType() {
+      return document.querySelector('input[name="download-type"]:checked')?.value || 'video';
+    }
+
+    function updateDownloadFormats() {
+      const type = selectedDownloadType();
+      const options = type === 'video'
+        ? [['1080p', '1080p'], ['720p', '720p'], ['best', '最高可用画质']]
+        : [['mp3', 'MP3'], ['m4a', 'M4A'], ['original', '原始音频']];
+      $('download-format-label').textContent = type === 'video' ? '清晰度' : '音频格式';
+      $('download-format').innerHTML = options.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+    }
+
+    async function submitDownload(event) {
+      event.preventDefault();
+      const url = $('download-url').value.trim();
+      if (!url) {
+        $('download-status').textContent = '请先粘贴链接';
+        return;
+      }
+      $('download-submit-button').disabled = true;
+      $('download-status').textContent = '正在创建下载任务';
+      try {
+        const job = await postJson('/downloads', {
+          url,
+          media_type: selectedDownloadType(),
+          format: $('download-format').value
+        });
+        $('download-url').value = '';
+        $('download-status').textContent = `任务已创建：${job.job_id}`;
+        toast('下载任务已创建');
+        await loadDownloads();
+      } catch (error) {
+        $('download-status').textContent = `提交失败：${error.message}`;
+        toast(`提交失败：${error.message}`, 'error');
+      } finally {
+        $('download-submit-button').disabled = false;
+      }
+    }
+
+    async function loadDownloads() {
+      const [data, queue] = await Promise.all([getJson('/downloads?limit=30'), getJson('/downloads/queue')]);
+      state.downloads = data.items || [];
+      const counts = queue.counts || {};
+      $('download-queue-status').textContent = `等待 ${counts.queued || 0} · 下载中 ${counts.running || 0} · 已完成 ${counts.succeeded || 0}`;
+      renderDownloads();
+    }
+
+    function renderDownloads() {
+      $('downloads').innerHTML = (state.downloads || []).map((job) => {
+        const result = job.result || {};
+        const payload = job.request_payload || {};
+        const typeLabel = (result.media_type || payload.media_type) === 'audio' ? '音频' : '视频';
+        const format = result.format || payload.format || '-';
+        const progress = Math.round((job.progress || 0) * 100);
+        const size = result.file_size ? ` · ${formatBytes(result.file_size)}` : '';
+        const error = job.error_message ? `<div class="meta">${esc(job.error_message)}</div>` : '';
+        const download = job.status === 'succeeded' && result.download_url
+          ? `<a class="link-button" href="${esc(result.download_url)}" download>下载文件</a>` : '';
+        const cancel = ['queued', 'running'].includes(job.status)
+          ? `<button class="link-button" type="button" onclick="cancelDownload('${esc(job.job_id)}')">取消</button>` : '';
+        const retry = ['failed', 'canceled'].includes(job.status)
+          ? `<button class="link-button" type="button" onclick="retryDownload('${esc(job.job_id)}')">重试</button>` : '';
+        return `
+          <div class="row">
+            <div class="row-head">
+              <div class="title">${esc(job.title || job.url)}</div>
+              <span class="status ${esc(job.status)}">${esc(statusLabel(job.status))}</span>
+            </div>
+            <div class="meta">${esc(downloadSourceLabel(job.url))} · ${typeLabel} · ${esc(format.toUpperCase())}${size} · ${esc(formatJobTime(job.updated_at || job.created_at))}</div>
+            ${job.status === 'running' ? `<progress class="download-progress" max="100" value="${progress}" aria-label="下载进度 ${progress}%"></progress><div class="meta">${esc(downloadStageLabel(job.stage))} · ${progress}%</div>` : ''}
+            ${error}
+            ${(download || cancel || retry) ? `<div class="mini-actions">${download}${cancel}${retry}</div>` : ''}
+          </div>
+        `;
+      }).join('') || '<div class="empty">暂无下载记录</div>';
+    }
+
+    function downloadSourceLabel(url) {
+      const value = String(url || '');
+      if (/bilibili[.]com|b23[.]tv/i.test(value)) return 'Bilibili';
+      if (/youtube[.]com|youtu[.]be/i.test(value)) return 'YouTube';
+      return '其他来源';
+    }
+
+    function downloadStageLabel(stage) {
+      return ({ preparing_download: '正在准备', downloading: '正在下载', finalizing_download: '正在合并或转换' })[stage] || '正在处理';
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value) || 0;
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+      return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    }
+
+    async function cancelDownload(jobId) {
+      try {
+        await postJson(`/downloads/${encodeURIComponent(jobId)}/cancel`, {});
+        toast('下载任务已取消');
+        await loadDownloads();
+      } catch (error) {
+        toast(`取消失败：${error.message}`, 'error');
+      }
+    }
+
+    async function retryDownload(jobId) {
+      try {
+        await postJson(`/downloads/${encodeURIComponent(jobId)}/retry`, {});
+        toast('下载任务已重新创建');
+        await loadDownloads();
+      } catch (error) {
+        toast(`重试失败：${error.message}`, 'error');
+      }
     }
 
     async function submitLocalFile() {
@@ -2379,6 +2562,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function youtubeCookieMessage(cookies) {
+      if (cookies.browser_cookie_source_configured) return '处理 YouTube 时会直接读取 Chrome 当前登录态，避免复用已轮换的 Cookie 文件。';
       if (cookies.ok && cookies.authenticated) return '已检测到 YouTube 登录 Cookie；处理视频时仍会由 YouTube 验证账号和访问权限。';
       if (cookies.ok) return '已导入 YouTube Cookie；如仍要求登录，请重新导入 Chrome 登录态。';
       if (cookies.exists) return '登录态文件中没有可用的 YouTube Cookie，请重新导入。';
@@ -2394,10 +2578,11 @@ INDEX_HTML = """<!doctype html>
         <div>${esc(bilibiliCookieMessage(cookies))}</div>
         <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(cookies.path || '')} · ${cookies.size || 0} B · ${esc(cookies.updated_at || '-')}</div></details>
       `;
-      $('youtube-status-pill').textContent = youtubeCookies.ok ? '已导入' : '需处理';
+      $('youtube-status-pill').textContent = youtubeCookies.ok ? (youtubeCookies.browser_cookie_source_configured ? '已接入' : '已导入') : '需处理';
       $('youtube-status-pill').className = `status ${youtubeCookies.ok ? 'succeeded' : 'failed'}`;
       $('youtube-account-status').innerHTML = `
         <div>${esc(youtubeCookieMessage(youtubeCookies))}</div>
+        <div class="meta">认证来源：${youtubeCookies.browser_cookie_source_configured ? 'Chrome 实时登录态' : '本地 Cookie 文件'}</div>
         <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(youtubeCookies.path || '')} · ${youtubeCookies.cookie_count || 0} 条 · ${esc(youtubeCookies.updated_at || '-')}</div></details>
         <div class="meta">PO Token 高级参数：${youtubeCookies.extractor_args_configured ? '已配置' : '未配置'}</div>
       `;
@@ -2610,7 +2795,7 @@ INDEX_HTML = """<!doctype html>
       $('youtube-open-login-button').disabled = true;
       try {
         const result = await postJson('/youtube/login/open', {});
-        $('youtube-action-status').textContent = result.ok ? '已打开 YouTube；确认登录后再点“导入 Chrome 登录态”。' : `请手动打开：${result.url}`;
+        $('youtube-action-status').textContent = result.ok ? '已打开 YouTube；确认登录后再点“接入 Chrome 实时登录态”。' : `请手动打开：${result.url}`;
       } catch (error) {
         $('youtube-action-status').textContent = `打开失败：${error.message}`;
       } finally {
@@ -2619,11 +2804,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function importYoutubeCookies() {
-      $('youtube-action-status').textContent = '正在从 Chrome 安全导入 YouTube 登录态';
+      $('youtube-action-status').textContent = '正在接入 Chrome 当前 YouTube 登录态';
       $('youtube-import-button').disabled = true;
       try {
         const result = await postJson('/cookies/youtube/import', {});
-        $('youtube-action-status').textContent = result.ok ? `导入成功：${result.cookies.cookie_count || 0} 条 YouTube Cookie` : '导入未完成';
+        $('youtube-action-status').textContent = result.ok ? '接入成功：后续任务将读取 Chrome 当前登录态' : '接入未完成';
         await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
       } catch (error) {
         $('youtube-action-status').textContent = `导入失败：${error.message}`;
@@ -2708,6 +2893,7 @@ INDEX_HTML = """<!doctype html>
       if (!state.initialized || activePanel === 'outputs-panel') tasks.push(loadOutputs());
       if (!state.initialized || activePanel === 'favorites-panel') tasks.push(loadFavorites());
       if (!state.initialized || activePanel === 'submit-panel') tasks.push(loadBatches());
+      if (!state.initialized || activePanel === 'download-panel') tasks.push(loadDownloads());
       if (!state.initialized || activePanel === 'maintenance-panel') {
         tasks.push(loadHealth(), loadRuntimeStatus(), loadMaintenanceStatus(), loadPromptSettings(), loadAgentStatus());
       }
@@ -2726,6 +2912,8 @@ INDEX_HTML = """<!doctype html>
 
     mergePanels();
     $('submit-form').addEventListener('submit', submitLinks);
+    $('download-form').addEventListener('submit', submitDownload);
+    document.querySelectorAll('input[name="download-type"]').forEach((input) => input.addEventListener('change', updateDownloadFormats));
     $('refresh-button').addEventListener('click', () => refreshAll(true));
     $('clear-links-button').addEventListener('click', () => {
       $('links').value = '';
@@ -2815,11 +3003,14 @@ INDEX_HTML = """<!doctype html>
     window.retryJob = retryJob;
     window.openResourcePackage = openResourcePackage;
     window.cancelJob = cancelJob;
+    window.cancelDownload = cancelDownload;
+    window.retryDownload = retryDownload;
     window.favoriteFromList = favoriteFromList;
     window.deleteFavorite = deleteFavorite;
     window.activateTab = activateTab;
     window.activateComposerMode = activateComposerMode;
     tickClock();
+    updateDownloadFormats();
     setInterval(tickClock, 1000);
     restoreRoute();
     refreshAll();

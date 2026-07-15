@@ -72,6 +72,7 @@ class Settings:
     strong_model: str
     deepseek_api_key: str
     deepseek_base_url: str
+    youtube_browser_cookie_source: str = ""
     cache_ttl_seconds: int = 604800
     notification_webhook_url: str = ""
     notification_webhook_token: str = ""
@@ -169,6 +170,7 @@ def load_settings() -> Settings:
         strong_model=_env("EASYSOURCEFLOW_STRONG_MODEL", "deepseek-v4-pro"),
         deepseek_api_key=os.environ.get("EASYSOURCEFLOW_MODEL_API_KEY") or os.environ.get("DEEPSEEK_API_KEY", ""),
         deepseek_base_url=os.environ.get("EASYSOURCEFLOW_MODEL_BASE_URL") or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        youtube_browser_cookie_source=_env("EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE", ""),
         cache_ttl_seconds=max(0, int(_env("EASYSOURCEFLOW_CACHE_TTL_SECONDS", "604800"))),
         notification_webhook_url=_env("EASYSOURCEFLOW_NOTIFICATION_WEBHOOK_URL", ""),
         notification_webhook_token=_env("EASYSOURCEFLOW_NOTIFICATION_WEBHOOK_TOKEN", ""),

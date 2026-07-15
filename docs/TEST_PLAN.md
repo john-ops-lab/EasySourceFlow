@@ -36,6 +36,8 @@
 - ASR 字错率、时间戳单调性和覆盖率。
 - Web 新操作的静态契约；安装浏览器后运行可选 Playwright 流程。
 - 通知最小数据集和无 shell 命令调用。
+- Web 音视频命令白名单、专用目录路径校验、持久化任务和附件字节传输。
+- MCP 工具列表明确不包含下载能力。
 
 运行：
 
@@ -110,7 +112,7 @@ scripts/easysourceflow youtube-regression
 
 预期：
 
-- Web 可以从 Chrome 导入仅包含 YouTube 域的登录态文件。
+- Web 可以接入 Chrome 配置档，YouTube 命令优先使用实时浏览器登录态而不是持久化 Cookie 快照。
 - 人工字幕优先；没有人工字幕时优先原语言自动字幕。
 - 英文字幕也生成中文总结。
 - 结果标明 `platform_subtitle`，核心要点时间轴数量与核心要点相同。
@@ -205,6 +207,17 @@ scripts/easysourceflow youtube-regression
 - 日志超过阈值时生成 gzip 轮转文件。
 - 维护 LaunchAgent 可被安装、查询和卸载。
 
+### TC-015: Web 音视频下载
+
+输入：一个短 Bilibili 视频和一个可访问的 YouTube 视频。
+
+预期：
+
+- Bilibili 视频可下载并由 FFmpeg 合并为可播放文件。
+- YouTube 音轨可通过 Deno/Node + EJS 验证并转换为 MP3/M4A。
+- 任务进度持久化，完成后的 HTTP 附件与本地文件字节一致。
+- 非平台链接失败时给出可读错误，MCP 工具列表中没有下载工具。
+
 ## 4. 手工验收
 
 当前阶段手工验证：
@@ -221,6 +234,7 @@ scripts/easysourceflow youtube-regression
 10. 上传一个 DOCX/EPUB/PDF 文档验证本地文件入口。
 11. 取消一个等待或运行中的任务。
 12. 运行本地烟测回归。
+13. 在 Web 分别下载一个短 Bilibili 视频和 YouTube 音频，并检查桌面/手机布局。
 
 ## 5. 暂缓测试
 

@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from pathlib import Path
 from typing import Optional
 
 from .config import Settings
@@ -18,6 +20,7 @@ from .extractors.video import extract_video_document
 from .extractors.web import extract_web_document
 from .extractors.wechat import extract_wechat_document
 from .health import run_health_checks
+from .media_download import download_media, media_download_root
 from .models import SourceDocument
 from .notifications import notify_event
 from .output import write_resource_package, write_summary_markdown
@@ -143,7 +146,7 @@ class EasySourceFlowService:
         force_refresh: bool = True,
     ) -> Optional[dict]:
         original = self.get_job(job_id)
-        if not original:
+        if not original or original.get("request_kind") == "media_download":
             return None
         retry_instruction = original.get("instruction") if instruction is None else instruction
         result = original.get("result") or {}
@@ -207,28 +210,94 @@ class EasySourceFlowService:
         return self.store.list_batches(limit=limit)
 
     def list_jobs(self, limit: int = 20, status: Optional[str] = None) -> list:
-        return self.store.list_jobs(limit=limit, status=status)
+        return self.store.list_jobs(limit=limit, status=status, exclude_request_kind="media_download")
+
+    def submit_media_download_async(self, url: str, media_type: str, format_name: str) -> dict:
+        job_id = f"download_{uuid.uuid4().hex}"
+        payload = {
+            "url": str(url or "").strip(),
+            "media_type": str(media_type or "").strip().lower(),
+            "format": str(format_name or "").strip().lower(),
+        }
+        self.store.create_job(
+            job_id,
+            payload["url"],
+            "",
+            request_kind="media_download",
+            request_payload=payload,
+        )
+        self.executor.submit(
+            self._run_media_download_job,
+            job_id,
+            payload["url"],
+            payload["media_type"],
+            payload["format"],
+        )
+        return _require_job(self.store.get_job(job_id), job_id)
+
+    def list_media_downloads(self, limit: int = 20, status: Optional[str] = None) -> list:
+        return self.store.list_jobs(limit=limit, status=status, request_kind="media_download")
+
+    def retry_media_download(self, job_id: str) -> Optional[dict]:
+        original = self.get_job(job_id)
+        if not original or original.get("request_kind") != "media_download":
+            return None
+        request_payload = original.get("request_payload") or {}
+        return self.submit_media_download_async(
+            url=str(request_payload.get("url") or original.get("url") or ""),
+            media_type=str(request_payload.get("media_type") or "video"),
+            format_name=str(request_payload.get("format") or "1080p"),
+        )
+
+    def media_download_queue_status(self) -> dict:
+        return {"counts": self.store.status_counts(request_kind="media_download")}
+
+    def media_download_file(self, job_id: str) -> Optional[Path]:
+        job = self.store.get_job(job_id)
+        if not job or job.get("request_kind") != "media_download" or job.get("status") != "succeeded":
+            return None
+        file_value = str((job.get("result") or {}).get("file_path") or "")
+        if not file_value:
+            return None
+        root = media_download_root(self.settings)
+        try:
+            path = Path(file_value).expanduser().resolve()
+            path.relative_to(root)
+        except (OSError, ValueError):
+            logger.warning("rejected media download path outside root job_id=%s", job_id)
+            return None
+        return path if path.is_file() else None
 
     def search_outputs(self, query: str, source_type: str = "", limit: int = 50) -> dict:
         return self.store.search_outputs(self.settings.output_dir, query, source_type=source_type, limit=limit)
 
     def cancel_job(self, job_id: str) -> Optional[dict]:
         job = self.store.get_job(job_id)
-        if not job:
+        if not job or job.get("request_kind") == "media_download":
             return None
+        return self._cancel_job(job, notify=True)
+
+    def cancel_media_download(self, job_id: str) -> Optional[dict]:
+        job = self.store.get_job(job_id)
+        if not job or job.get("request_kind") != "media_download":
+            return None
+        return self._cancel_job(job, notify=False)
+
+    def _cancel_job(self, job: dict, notify: bool) -> dict:
+        job_id = job["job_id"]
         if job["status"] in {"succeeded", "failed", "canceled"}:
             return job
         self.store.mark_canceled(job_id)
         logger.info("job canceled job_id=%s previous_status=%s", job_id, job["status"])
         canceled = self.store.get_job(job_id)
-        if canceled:
+        if canceled and notify:
             self._notify_job(canceled)
-        return canceled
+        return _require_job(canceled, job_id)
 
     def queue_status(self) -> dict:
-        counts = self.store.status_counts()
+        counts = self.store.status_counts(exclude_request_kind="media_download")
         active_limit = 100
-        active = self.store.list_jobs(limit=active_limit, status="running") + self.store.list_jobs(limit=active_limit, status="queued")
+        active = self.store.list_jobs(limit=active_limit, status="running", exclude_request_kind="media_download") + self.store.list_jobs(limit=active_limit, status="queued", exclude_request_kind="media_download")
         expected_active = int(counts.get("running", 0)) + int(counts.get("queued", 0))
         return {
             "counts": counts,
@@ -401,6 +470,39 @@ class EasySourceFlowService:
             if failed:
                 self._notify_job(failed)
 
+    def _run_media_download_job(self, job_id: str, url: str, media_type: str, format_name: str) -> None:
+        destination = media_download_root(self.settings) / job_id
+        try:
+            if self.store.is_canceled(job_id):
+                return
+            self.store.mark_running(job_id, "preparing_download", 0.02)
+            result = download_media(
+                url,
+                media_type,
+                format_name,
+                self.settings,
+                destination,
+                progress_callback=lambda stage, progress: self.store.mark_running(job_id, stage, progress),
+                cancel_check=lambda: self.store.is_canceled(job_id),
+            )
+            if result.get("canceled") or self.store.is_canceled(job_id):
+                return
+            result["download_url"] = f"/downloads/{job_id}/file"
+            self.store.mark_succeeded(
+                job_id,
+                str(result.get("canonical_url") or url),
+                str(result.get("title") or result.get("file_name") or url),
+                result,
+            )
+        except EasySourceFlowError as exc:
+            shutil.rmtree(destination, ignore_errors=True)
+            logger.warning("media download failed job_id=%s code=%s", job_id, exc.code)
+            self.store.mark_failed(job_id, exc.code, exc.message, exc.next_steps)
+        except Exception as exc:
+            shutil.rmtree(destination, ignore_errors=True)
+            logger.exception("media download failed unexpectedly job_id=%s", job_id)
+            self.store.mark_failed(job_id, "unexpected_error", f"Unexpected error: {type(exc).__name__}.")
+
     def _finish_document_job(
         self,
         job_id: str,
@@ -480,6 +582,17 @@ class EasySourceFlowService:
                     payload.get("metadata") or {"input_kind": "recovered_document"},
                     summary_quality,
                     force_refresh,
+                )
+                return
+        elif request_kind == "media_download":
+            url = str(payload.get("url") or job.get("url") or "")
+            if url:
+                self.executor.submit(
+                    self._run_media_download_job,
+                    job_id,
+                    url,
+                    str(payload.get("media_type") or "video"),
+                    str(payload.get("format") or "1080p"),
                 )
                 return
         self.store.mark_interrupted(job_id, "EasySourceFlow restarted but this job did not contain recoverable input.")

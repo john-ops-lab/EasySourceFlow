@@ -15,6 +15,7 @@ from easysourceflow_core.config import DEFAULT_SUMMARY_PROMPT, Settings
 from easysourceflow_core.errors import EasySourceFlowError
 from easysourceflow_core.health import _check_deepseek
 from easysourceflow_core.models import SourceDocument, SummaryResult
+from easysourceflow_core.media_download import _download_command, _download_failure, _resolve_downloaded_file
 from easysourceflow_core.notifications import notify_event
 from easysourceflow_core.output import write_resource_package, write_summary_markdown
 from easysourceflow_core.service import EasySourceFlowService, _cache_context
@@ -211,6 +212,91 @@ class CoreTests(unittest.TestCase):
         self.assertIn('id="youtube-import-button"', page)
         self.assertIn('data-maintenance-tab="agent-maintenance"', page)
         self.assertIn("支持来源：", page)
+        self.assertIn('id="download-panel"', page)
+        self.assertIn('id="download-form"', page)
+        self.assertIn("音视频下载", page)
+
+    def test_media_download_command_uses_controlled_video_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(**{**_settings(tmp).__dict__, "ffmpeg_path": "/example/bin/ffmpeg"})
+            command = _download_command(
+                "/example/bin/yt-dlp",
+                "https://www.bilibili.com/video/BV1example",
+                "bilibili",
+                "video",
+                "1080p",
+                settings,
+                Path(tmp) / "media",
+            )
+
+        self.assertIn("--no-playlist", command)
+        self.assertIn("--no-overwrites", command)
+        self.assertIn("--progress-template", command)
+        self.assertEqual(command[command.index("--format") + 1], "bv*[height<=1080]+ba/b[height<=1080]/b")
+        self.assertEqual(command[-1], "https://www.bilibili.com/video/BV1example")
+
+    def test_media_download_command_converts_audio_and_uses_youtube_cookies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cookies = Path(tmp) / "youtube.cookies"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            settings = Settings(**{**_settings(tmp).__dict__, "youtube_cookies_file": str(cookies)})
+            command = _download_command(
+                "/example/bin/yt-dlp",
+                "https://www.youtube.com/watch?v=example",
+                "youtube",
+                "audio",
+                "mp3",
+                settings,
+                Path(tmp) / "media",
+            )
+
+        self.assertIn("--extract-audio", command)
+        self.assertEqual(command[command.index("--audio-format") + 1], "mp3")
+        self.assertEqual(command[command.index("--cookies") + 1], str(cookies))
+
+    def test_youtube_live_browser_login_takes_precedence_over_cookie_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cookies = Path(tmp) / "youtube.cookies"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "youtube_cookies_file": str(cookies),
+                    "youtube_browser_cookie_source": "chrome:Default",
+                }
+            )
+            command = _download_command(
+                "/example/bin/yt-dlp",
+                "https://www.youtube.com/watch?v=example",
+                "youtube",
+                "audio",
+                "mp3",
+                settings,
+                Path(tmp) / "media",
+            )
+
+        self.assertEqual(command[command.index("--cookies-from-browser") + 1], "chrome:Default")
+        self.assertNotIn("--cookies", command)
+
+    def test_media_download_file_resolution_rejects_path_outside_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "download"
+            root.mkdir()
+            outside = Path(tmp) / "outside.mp4"
+            outside.write_bytes(b"outside")
+            inside = root / "inside.mp4"
+            inside.write_bytes(b"inside")
+
+            resolved = _resolve_downloaded_file(root, str(outside))
+
+        self.assertEqual(resolved.name, "inside.mp4")
+
+    def test_media_download_preserves_youtube_failure_reason(self):
+        rate_limited = _download_failure("youtube", "ERROR: HTTP Error 429: Too Many Requests")
+        po_token = _download_failure("youtube", "ERROR: This client requires a PO Token")
+
+        self.assertEqual(rate_limited.code, "youtube_rate_limited")
+        self.assertEqual(po_token.code, "youtube_po_token_required")
 
     def test_render_markdown_formats_common_blocks_and_escapes_html(self):
         rendered = _render_markdown(

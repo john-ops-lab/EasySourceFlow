@@ -2,9 +2,25 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -z "${PYTHON_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+
+python_is_supported() {
+  local candidate="$1"
+  command -v "${candidate}" >/dev/null 2>&1 || [[ -x "${candidate}" ]] || return 1
+  "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  :
+elif [[ -x "${ROOT_DIR}/.venv/bin/python" ]] && python_is_supported "${ROOT_DIR}/.venv/bin/python"; then
   PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
 else
+  PYTHON_BIN=""
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+    if python_is_supported "${candidate}"; then
+      PYTHON_BIN="$(command -v "${candidate}")"
+      break
+    fi
+  done
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
 HOST="${EASYSOURCEFLOW_HOST:-127.0.0.1}"
@@ -203,6 +219,7 @@ health_service() {
       EASYSOURCEFLOW_DATA_DIR="${RUNTIME_DATA}" \
       EASYSOURCEFLOW_DATABASE="${RUNTIME_DATA}/easysourceflow.sqlite3" \
       EASYSOURCEFLOW_OUTPUT_DIR="${RUNTIME_OUTPUT}" \
+      EASYSOURCEFLOW_YTDLP_PATH="${RUNTIME_VENV}/bin/yt-dlp" \
       "${RUNTIME_PYTHON}" -m easysourceflow_core.health
   else
     env PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" -m easysourceflow_core.health
@@ -261,20 +278,64 @@ backup_service() {
 }
 
 sync_runtime() {
+  if ! python_is_supported "${PYTHON_BIN}"; then
+    printf 'EasySourceFlow requires Python 3.10 or newer. Set PYTHON_BIN to a supported interpreter.\n' >&2
+    return 1
+  fi
   ensure_dirs
   mkdir -p "${RUNTIME_SRC}" "${RUNTIME_DATA}" "${RUNTIME_OUTPUT}" "${RUNTIME_DIR}"
   rsync -a --delete "${ROOT_DIR}/src/" "${RUNTIME_SRC}/"
   if [[ -f "${ROOT_DIR}/.env" ]]; then
-    cp "${ROOT_DIR}/.env" "${RUNTIME_ENV}"
+    if [[ -f "${RUNTIME_ENV}" ]]; then
+      local runtime_only_values
+      runtime_only_values="$(mktemp "${RUNTIME_DIR}/runtime-env-extra.XXXXXX")"
+      awk -F= '
+        NR == FNR {
+          if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) seen[$1] = 1
+          next
+        }
+        $0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && !($1 in seen) { print }
+      ' "${ROOT_DIR}/.env" "${RUNTIME_ENV}" >"${runtime_only_values}"
+      cp "${ROOT_DIR}/.env" "${RUNTIME_ENV}"
+      if [[ -s "${runtime_only_values}" ]]; then
+        printf '\n# Values managed by the local Web console.\n' >>"${RUNTIME_ENV}"
+        cat "${runtime_only_values}" >>"${RUNTIME_ENV}"
+      fi
+      rm -f "${runtime_only_values}"
+    else
+      cp "${ROOT_DIR}/.env" "${RUNTIME_ENV}"
+    fi
   else
-    : >"${RUNTIME_ENV}"
+    [[ -f "${RUNTIME_ENV}" ]] || : >"${RUNTIME_ENV}"
   fi
   chmod 600 "${RUNTIME_ENV}"
-  if [[ ! -x "${RUNTIME_PYTHON}" ]]; then
-    "${PYTHON_BIN}" -m venv "${RUNTIME_VENV}"
+  local venv_backup=""
+  if [[ -x "${RUNTIME_PYTHON}" ]] && ! python_is_supported "${RUNTIME_PYTHON}"; then
+    venv_backup="${RUNTIME_VENV}.python-backup"
+    rm -rf "${venv_backup}"
+    mv "${RUNTIME_VENV}" "${venv_backup}"
   fi
-  "${RUNTIME_PYTHON}" -m pip install --quiet --upgrade pip
-  "${RUNTIME_PYTHON}" -m pip install --quiet "beautifulsoup4>=4.12.0" "pypdf>=5.0.0" "yt-dlp>=2025.10.14" playwright
+  if [[ ! -x "${RUNTIME_PYTHON}" ]]; then
+    if ! "${PYTHON_BIN}" -m venv "${RUNTIME_VENV}"; then
+      rm -rf "${RUNTIME_VENV}"
+      [[ -n "${venv_backup}" ]] && mv "${venv_backup}" "${RUNTIME_VENV}"
+      return 1
+    fi
+  fi
+  if ! "${RUNTIME_PYTHON}" -m pip install --quiet --upgrade pip \
+    "beautifulsoup4>=4.12.0" "pypdf>=5.0.0" "yt-dlp[default]>=2026.7.4" playwright; then
+    if [[ -n "${venv_backup}" ]]; then
+      rm -rf "${RUNTIME_VENV}"
+      mv "${venv_backup}" "${RUNTIME_VENV}"
+    fi
+    return 1
+  fi
+  if [[ -n "${venv_backup}" ]]; then
+    rm -rf "${venv_backup}"
+    if [[ -f "${PLIST_FILE}" ]]; then
+      printf 'Runtime Python was upgraded. Run scripts/easysourceflow install-launchd to refresh the LaunchAgent interpreter path.\n'
+    fi
+  fi
 }
 
 plist_escape() {

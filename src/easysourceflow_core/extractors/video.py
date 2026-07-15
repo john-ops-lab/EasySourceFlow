@@ -850,8 +850,11 @@ def _read_first_subtitle(candidates: List[Path]) -> str:
 def _add_youtube_auth_args(command: List[str], source_type: str, settings: Settings) -> None:
     if source_type != "youtube":
         return
+    browser_cookie_source = settings.youtube_browser_cookie_source.strip()
     youtube_cookies_file = effective_youtube_cookies_file(settings)
-    if youtube_cookies_file:
+    if browser_cookie_source:
+        command.extend(["--cookies-from-browser", browser_cookie_source])
+    elif youtube_cookies_file:
         cookies_file = Path(youtube_cookies_file).expanduser()
         if not cookies_file.exists():
             raise need_cookies(f"Configured YouTube cookies file does not exist: {cookies_file}")

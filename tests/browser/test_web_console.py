@@ -92,7 +92,7 @@ class WebConsoleBrowserTests(unittest.TestCase):
                     page.reload(wait_until="networkidle")
                     horizontal_overflow = page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth")
                     self.assertFalse(horizontal_overflow)
-                    composer_top = page.locator(".primary-card").bounding_box()["y"]
+                    composer_top = page.locator("#submit-panel .primary-card").bounding_box()["y"]
                     self.assertLess(composer_top, 220)
                     unexpected_errors = [
                         error for error in console_errors if "status of 400 (Bad Request)" not in error

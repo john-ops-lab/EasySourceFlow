@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -15,7 +16,7 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from . import __version__
 from .config import (
@@ -163,6 +164,31 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             if parsed.path == "/maintenance/status":
                 self._json(maintenance_status(settings))
                 return
+            if parsed.path == "/downloads":
+                query = parse_qs(parsed.query)
+                limit = int((query.get("limit") or ["20"])[0])
+                status = (query.get("status") or [None])[0]
+                self._json({"items": service.list_media_downloads(limit=limit, status=status)})
+                return
+            if parsed.path == "/downloads/queue":
+                self._json(service.media_download_queue_status())
+                return
+            download_match = re.fullmatch(r"/downloads/([^/]+)(?:/(file))?", parsed.path)
+            if download_match:
+                job_id, action = download_match.groups()
+                if action == "file":
+                    path = service.media_download_file(job_id)
+                    if not path:
+                        self._json({"error": {"code": "not_found", "message": "Download file not found."}}, status=404)
+                        return
+                    self._file(path)
+                    return
+                job = service.get_job(job_id)
+                if not job or job.get("request_kind") != "media_download":
+                    self._json({"error": {"code": "not_found", "message": "Download job not found."}}, status=404)
+                    return
+                self._json(job)
+                return
             if parsed.path.startswith("/outputs/"):
                 status, html = render_output(settings.output_dir, parsed.path[len("/outputs/") :])
                 self._html(html, status=status)
@@ -203,6 +229,15 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             parsed = urlparse(self.path)
             _record_agent_request(settings, self.headers, parsed.path)
             logger.info("http post path=%s", parsed.path)
+            download_action = re.fullmatch(r"/downloads/([^/]+)/(retry|cancel)", parsed.path)
+            if download_action:
+                job_id, action = download_action.groups()
+                job = service.retry_media_download(job_id) if action == "retry" else service.cancel_media_download(job_id)
+                if not job:
+                    self._json({"error": {"code": "not_found", "message": "Download job not found."}}, status=404)
+                    return
+                self._json(job)
+                return
             if parsed.path.endswith("/retry") and parsed.path.startswith("/jobs/"):
                 payload = self._read_json()
                 job_id = parsed.path.split("/")[-2]
@@ -242,6 +277,7 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 "/cookies/bilibili/import",
                 "/youtube/login/open",
                 "/cookies/youtube/import",
+                "/downloads",
             }:
                 self._json({"error": {"code": "not_found", "message": "Endpoint not found."}}, status=404)
                 return
@@ -313,6 +349,14 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                     self._json(service.submit_document_payload(payload, run_async=True))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
+                return
+            if parsed.path == "/downloads":
+                job = service.submit_media_download_async(
+                    url=str(payload.get("url") or ""),
+                    media_type=str(payload.get("media_type") or ""),
+                    format_name=str(payload.get("format") or ""),
+                )
+                self._json(job)
                 return
             if parsed.path == "/cleanup":
                 days = int(payload.get("days", 14))
@@ -392,6 +436,21 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             self.end_headers()
             self._write_body(body)
 
+        def _file(self, path: Path) -> None:
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            stat = path.stat()
+            self.send_response(200)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(stat.st_size))
+            self.send_header("content-disposition", f"attachment; filename*=UTF-8''{quote(path.name)}")
+            self.send_header("x-content-type-options", "nosniff")
+            self.end_headers()
+            try:
+                with path.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                logger.debug("client disconnected during media download path=%s", path)
+
         def _write_body(self, body: bytes) -> None:
             try:
                 self.wfile.write(body)
@@ -423,6 +482,11 @@ def _youtube_cookie_status(settings: Settings) -> dict:
         {"youtube.com"},
         auth_cookie_names={"LOGIN_INFO", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"},
     )
+    result["browser_cookie_source"] = settings.youtube_browser_cookie_source
+    result["browser_cookie_source_configured"] = bool(settings.youtube_browser_cookie_source.strip())
+    if result["browser_cookie_source_configured"]:
+        result["ok"] = True
+        result["message"] = "Live Chrome login state is configured for YouTube."
     result["extractor_args_configured"] = bool(settings.youtube_extractor_args.strip())
     return result
 
@@ -833,10 +897,19 @@ def _import_youtube_cookies(settings: Settings) -> dict:
         test_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         allowed_domains={"youtube.com"},
         error_code="youtube_cookie_import_failed",
+        browser_cookie_source="chrome:Default",
     )
-    config_file = _write_env_values(_config_file_path(), {"EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE": str(cookies_path)})
+    browser_cookie_source = "chrome:Default"
+    config_file = _write_env_values(
+        _config_file_path(),
+        {
+            "EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE": str(cookies_path),
+            "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE": browser_cookie_source,
+        },
+    )
     object.__setattr__(settings, "youtube_cookies_file", str(cookies_path))
-    logger.info("youtube cookies imported path=%s config_file=%s", cookies_path, config_file)
+    object.__setattr__(settings, "youtube_browser_cookie_source", browser_cookie_source)
+    logger.info("youtube browser login configured source=%s snapshot=%s config_file=%s", browser_cookie_source, cookies_path, config_file)
     return {"ok": True, "config_file": str(config_file), "cookies": _youtube_cookie_status(settings)}
 
 
@@ -848,6 +921,7 @@ def _import_browser_cookies(
     test_url: str,
     allowed_domains: set[str],
     error_code: str,
+    browser_cookie_source: str = "chrome",
 ) -> None:
     cookies_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -861,7 +935,7 @@ def _import_browser_cookies(
         command = [
             ytdlp,
             "--cookies-from-browser",
-            "chrome",
+            browser_cookie_source,
             "--cookies",
             str(raw_path),
             "--skip-download",
