@@ -62,9 +62,9 @@ class RepositorySecurityTests(unittest.TestCase):
                     r"/" + "Users" + r"/[A-Za-z0-9._-]+/",
                     r"/home/[A-Za-z0-9._-]+/",
                     r"[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\",
-                    "workspace-" + "varys",
-                    "john-" + "ops-lab",
-                    r"com\." + "king",
+                    r"\.openclaw(?:/|\\)",
+                    r"com\.[A-Za-z0-9_-]+\.easysourceflow(?:d|-maintenance)",
+                    r"github\.com/[A-Za-z0-9_.-]+/EasySourceFlow",
                 ]
             ),
             re.IGNORECASE,

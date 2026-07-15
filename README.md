@@ -9,7 +9,7 @@
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-本地优先-111111?logo=apple&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-Agent%20Ready-00A67E)
-[![Version](https://img.shields.io/badge/version-v0.1.0-FF0000)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.1.1-FF0000)](CHANGELOG.md)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ![EasySourceFlow Web 控制台](docs/assets/web-console.png)
