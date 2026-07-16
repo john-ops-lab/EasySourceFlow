@@ -81,6 +81,7 @@ def write_resource_package(result: SummaryResult, summary_path: Path) -> Optiona
         "extraction_method": result.source.extraction_method,
         "subtitle_status": source_metadata.get("subtitle_status"),
         "subtitle_source": source_metadata.get("subtitle_source"),
+        "subtitle_provenance": source_metadata.get("subtitle_provenance"),
         "transcript_origin": source_metadata.get("transcript_origin"),
         "transcript_origin_label": source_metadata.get("transcript_origin_label"),
         "transcript_quality": source_metadata.get("transcript_quality"),

@@ -8,6 +8,17 @@
       "minimum_core_points": 3
     },
     {
+      "id": "wang-defeng-subtitle-identity",
+      "url": "https://www.bilibili.com/video/BV11v7N6vENd",
+      "expected_transcript_origins": ["platform_subtitle"],
+      "expected_subtitle_statuses": ["bilibili_subtitle"],
+      "expected_subtitle_languages": ["中文", "zh"],
+      "expected_bvid": "BV11v7N6vENd",
+      "maximum_duration_ratio": 1.03,
+      "expected_summary_language": "zh",
+      "minimum_core_points": 3
+    },
+    {
       "id": "english-subtitle-to-chinese",
       "url": "https://www.bilibili.com/video/BV19CoBYjEFg",
       "expected_transcript_origins": ["platform_subtitle", "local_asr"],

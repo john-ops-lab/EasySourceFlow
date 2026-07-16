@@ -21,6 +21,7 @@
 - 本地 HTML/DOCX/EPUB 上传解析。
 - 视频资源包写入。
 - YouTube 人工/自动字幕优先级、平台字幕匹配、登录错误分类和本地 ASR 回退。
+- Bilibili 精确 BVID/CID、分 P 边界、字幕时间结构、超长字幕拒绝和来源追踪。
 - Bilibili/YouTube Chrome 登录态导入后的域名过滤和无敏感值响应。
 - 微信公众号 HTML 抽取。
 - 微信懒加载图片收集。
@@ -82,6 +83,8 @@ scripts/easysourceflow youtube-regression
 
 - 获取元数据。
 - 有字幕时使用字幕。
+- 字幕 BVID/CID 与目标视频一致，字幕末时间不超出视频时长容差。
+- 标题没有重复字幕措辞时仍可使用；仅命中通用标签不能绕过时间结构校验。
 - 生成 Markdown 输出。
 - 生成视频资源包。
 

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Optional
 
 
-_TIMESTAMP = re.compile(r"^\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)\s*(?:-|-->)?")
+_TIME_PATTERN = r"\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?"
+_TIMESTAMP = re.compile(
+    rf"^\[(?P<start>{_TIME_PATTERN})(?:\s*(?:-->|-)\s*(?P<end>{_TIME_PATTERN}))?\]"
+)
 
 
 def evaluate_transcript(reference: str, hypothesis: str, duration_seconds: Optional[float] = None) -> dict:
@@ -35,19 +38,34 @@ def evaluate_transcript(reference: str, hypothesis: str, duration_seconds: Optio
 
 
 def transcript_timing_quality(transcript: str, duration_seconds: Optional[float] = None) -> dict:
-    timestamps = []
+    starts = []
+    positions = []
     for raw_line in transcript.splitlines():
         match = _TIMESTAMP.match(raw_line.strip())
         if match:
-            timestamps.append(_time_to_seconds(match.group("start")))
-    monotonic = all(current >= previous for previous, current in zip(timestamps, timestamps[1:]))
+            start = _time_to_seconds(match.group("start"))
+            end = _time_to_seconds(match.group("end")) if match.group("end") else start
+            starts.append(start)
+            positions.append(max(start, end))
+    monotonic = all(current >= previous for previous, current in zip(starts, starts[1:]))
     coverage = None
-    if duration_seconds and duration_seconds > 0 and timestamps:
-        coverage = min(1.0, max(0.0, timestamps[-1] / duration_seconds))
+    last_timestamp = max(positions) if positions else None
+    duration = float(duration_seconds or 0.0)
+    if duration > 0 and last_timestamp is not None:
+        coverage = max(0.0, last_timestamp / duration)
+    tolerance = max(5.0, duration * 0.03) if duration > 0 else None
+    exceeds_duration = bool(
+        duration > 0
+        and last_timestamp is not None
+        and tolerance is not None
+        and last_timestamp > duration + tolerance
+    )
     return {
-        "timestamp_count": len(timestamps),
+        "timestamp_count": len(starts),
         "timestamps_monotonic": monotonic,
         "duration_coverage": round(coverage, 4) if coverage is not None else None,
+        "last_timestamp_seconds": round(last_timestamp, 3) if last_timestamp is not None else None,
+        "exceeds_duration": exceeds_duration,
     }
 
 
@@ -56,9 +74,11 @@ def describe_transcript_quality(transcript: str, duration_seconds: Optional[floa
     timing = transcript_timing_quality(transcript, duration_seconds)
     if not plain:
         confidence = "none"
+    elif not timing["timestamps_monotonic"] or timing["exceeds_duration"]:
+        confidence = "low"
     elif origin == "platform_subtitle":
         confidence = "high"
-    elif not timing["timestamps_monotonic"] or len(plain) < 80:
+    elif len(plain) < 80:
         confidence = "low"
     elif timing["duration_coverage"] is not None and timing["duration_coverage"] < 0.5:
         confidence = "low"

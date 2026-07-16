@@ -29,6 +29,7 @@ from easysourceflow_core.extractors.video import (
     _extract_ytdlp_subtitle,
     _platform_transcript_is_usable,
     _transcript_matches_video,
+    _validate_transcript_timing,
     _youtube_failure_status,
     _youtube_subtitle_languages,
     extract_video_document,
@@ -289,6 +290,17 @@ class CoreTests(unittest.TestCase):
         quality = describe_transcript_quality("[00:00] 这是一段平台字幕", 10, "platform_subtitle")
         self.assertEqual(quality["confidence"], "high")
 
+    def test_asr_quality_does_not_hide_timestamps_beyond_video_duration(self):
+        quality = describe_transcript_quality(
+            "[00:00-07:56] 这段字幕明显超过视频时长。",
+            198,
+            "platform_subtitle",
+        )
+
+        self.assertGreater(quality["duration_coverage"], 2)
+        self.assertTrue(quality["exceeds_duration"])
+        self.assertEqual(quality["confidence"], "low")
+
     def test_notification_command_receives_only_minimal_safe_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(
@@ -333,6 +345,8 @@ class CoreTests(unittest.TestCase):
                                 "expected_transcript_origins": ["platform_subtitle"],
                                 "expected_subtitle_statuses": ["bilibili_subtitle"],
                                 "expected_subtitle_languages": ["zh"],
+                                "expected_bvid": "BV1example",
+                                "maximum_duration_ratio": 1.03,
                                 "expected_summary_language": "zh",
                                 "minimum_core_points": 2,
                             }
@@ -355,6 +369,10 @@ class CoreTests(unittest.TestCase):
                             "transcript_origin": "platform_subtitle",
                             "subtitle_status": "bilibili_subtitle",
                             "subtitle_language": "zh-CN",
+                            "subtitle_provenance": {
+                                "bvid": "BV1example",
+                                "duration_ratio": 0.99,
+                            },
                         },
                     },
                 },
@@ -1243,6 +1261,11 @@ class CoreTests(unittest.TestCase):
                     "source": "bilibili_wbi_player_v2",
                     "language": "中文（自动生成）",
                     "rejections": "bilibili_wbi_player_v2:unknown:mismatch",
+                    "provenance": {
+                        "bvid": "BV1mY411U7as",
+                        "subtitle_end_seconds": 58.0,
+                        "duration_ratio": 0.3742,
+                    },
                 },
             ), patch("easysourceflow_core.extractors.video._transcribe_video_audio") as transcribe:
                 document = extract_video_document("https://www.bilibili.com/video/BV1mY411U7as", settings)
@@ -1252,6 +1275,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(document.metadata["subtitle_source"], "bilibili_wbi_player_v2")
             self.assertEqual(document.metadata["subtitle_language"], "中文（自动生成）")
             self.assertEqual(document.metadata["transcript_origin_label"], "原始字幕")
+            self.assertEqual(document.metadata["transcript_quality"]["duration_coverage"], 0.3742)
             self.assertIn("mismatch", document.metadata["subtitle_rejections"])
             self.assertIn("黄帝内经", document.content_text)
 
@@ -1307,7 +1331,44 @@ class CoreTests(unittest.TestCase):
         metadata = {"title": "完全不同语言的标题", "duration": 360}
 
         self.assertTrue(_platform_transcript_is_usable(transcript, metadata))
-        self.assertFalse(_transcript_matches_video(transcript, metadata))
+        self.assertTrue(_transcript_matches_video(transcript, metadata))
+
+    def test_platform_subtitle_rejects_timeline_longer_than_video(self):
+        transcript = (
+            "[00:00-03:00] 第一段内容与标题中的通用标签相符。\n"
+            "[03:00-07:56] 但字幕时间轴远远超过视频时长。"
+        )
+        report = _validate_transcript_timing(transcript, 198, require_timestamps=True)
+
+        self.assertFalse(report["valid"])
+        self.assertEqual(report["reason"], "duration_exceeded")
+        self.assertFalse(_platform_transcript_is_usable(transcript, {"duration": 198}))
+
+    def test_bilibili_subsecond_segments_remain_valid_after_formatting(self):
+        from easysourceflow_core.extractors.video import _bilibili_subtitle_payload_to_result
+
+        result = _bilibili_subtitle_payload_to_result(
+            {
+                "body": [
+                    {"from": 0.2, "to": 0.8, "content": "第一个很短的字幕片段但内容仍然完整"},
+                    {"from": 0.9, "to": 1.4, "content": "第二个很短的字幕片段继续说明观点"},
+                ]
+            }
+        )
+
+        self.assertIn("[00:00-00:01]", result["transcript"])
+        self.assertTrue(_platform_transcript_is_usable(result["transcript"], {"duration": 2}))
+
+    def test_bilibili_raw_payload_rejects_end_before_start(self):
+        from easysourceflow_core.extractors.video import _validate_bilibili_payload_timing
+
+        report = _validate_bilibili_payload_timing(
+            {"body": [{"from": 10.9, "to": 10.1, "content": "错误时间段"}]},
+            30,
+        )
+
+        self.assertFalse(report["valid"])
+        self.assertEqual(report["reason"], "invalid_timestamp_range")
 
     def test_youtube_without_subtitles_falls_back_to_local_asr(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1367,6 +1428,7 @@ class CoreTests(unittest.TestCase):
             metadata = {
                 "title": "倪海厦预知自己59岁大限的片段，蓦然回首句句都是暗示！",
                 "description": "倪海厦讲解黄帝内经、天文地理和人事。",
+                "duration": 60,
             }
 
             def fake_bilibili_json(_opener, url):
@@ -1380,13 +1442,19 @@ class CoreTests(unittest.TestCase):
                         }
                     }
                 if "web-interface/wbi/view" in url or "web-interface/view" in url:
-                    return {"data": {"aid": 1, "pages": [{"cid": 2}]}}
+                    return {
+                        "data": {
+                            "aid": 1,
+                            "bvid": "BV1mY411U7as",
+                            "pages": [{"cid": 2, "duration": 60}],
+                        }
+                    }
                 if "player/wbi/v2" in url and not hasattr(fake_bilibili_json, "served_bad"):
                     fake_bilibili_json.served_bad = True
                     return {
                         "data": {
                             "subtitle": {
-                                "subtitles": [{"subtitle_url": "//example.test/bad.json", "lan": "zh-CN", "lan_doc": "中文"}]
+                                "subtitles": [{"id": 10, "subtitle_url": "//example.test/bad.json", "lan": "zh-CN", "lan_doc": "中文", "ai_type": 0}]
                             }
                         }
                     }
@@ -1394,17 +1462,17 @@ class CoreTests(unittest.TestCase):
                     return {
                         "data": {
                             "subtitle": {
-                                "subtitles": [{"subtitle_url": "//example.test/good.json", "lan": "zh-CN", "lan_doc": "中文"}]
+                                "subtitles": [{"id": 11, "subtitle_url": "//example.test/good.json", "lan": "zh-CN", "lan_doc": "中文", "ai_type": 0}]
                             }
                         }
                     }
                 if "player/v2" in url:
-                    return {"data": {"subtitle": {"subtitles": []}}}
+                    raise AssertionError("legacy player/v2 must not be called")
                 if "bad.json" in url:
                     return {
                         "body": [
-                            {"from": 0, "to": 12, "content": "水冷散热器安装教程今天我们讲如何安装显卡和机箱风扇"},
-                            {"from": 13, "to": 25, "content": "接下来拆开包装检查螺丝接口和主板走线方式"},
+                            {"from": 0, "to": 45, "content": "水冷散热器安装教程今天我们讲如何安装显卡和机箱风扇"},
+                            {"from": 46, "to": 90, "content": "接下来拆开包装检查螺丝接口和主板走线方式"},
                         ]
                     }
                 if "good.json" in url:
@@ -1425,9 +1493,63 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["status"], "bilibili_subtitle")
             self.assertEqual(result["source"], "bilibili_wbi_player_v2")
             self.assertEqual(result["language"], "中文")
-            self.assertIn("mismatch", result["rejections"])
+            self.assertIn("duration_exceeded", result["rejections"])
             self.assertIn("黄帝内经", result["transcript"])
             self.assertIn("WEBVTT", result["subtitle_vtt"])
+            self.assertEqual(result["provenance"]["bvid"], "BV1mY411U7as")
+            self.assertEqual(result["provenance"]["cid"], 2)
+            self.assertEqual(result["provenance"]["subtitle_id"], "11")
+
+    def test_bilibili_subtitle_rejects_out_of_range_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+
+            def fake_bilibili_json(_opener, url):
+                if "web-interface/nav" in url:
+                    return {"__fetch_error": "not available"}
+                if "web-interface/view" in url:
+                    return {
+                        "data": {
+                            "aid": 1,
+                            "bvid": "BV1mY411U7as",
+                            "pages": [{"cid": 2, "duration": 60}],
+                        }
+                    }
+                return {"__fetch_error": "unexpected"}
+
+            with patch("easysourceflow_core.extractors.video._bilibili_json", side_effect=fake_bilibili_json):
+                result = _extract_bilibili_subtitle(
+                    "https://www.bilibili.com/video/BV1mY411U7as?p=2",
+                    settings,
+                    {"duration": 60},
+                )
+
+            self.assertEqual(result["status"], "bilibili_page_not_found")
+
+    def test_video_without_trusted_transcript_fails_instead_of_summarizing_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            metadata = {
+                "title": "Only metadata is available",
+                "description": "This description is long enough to look summarizable but is not the video transcript.",
+                "duration": 120,
+            }
+            with patch("easysourceflow_core.extractors.video._find_ytdlp", return_value="/test/yt-dlp"), patch(
+                "easysourceflow_core.extractors.video._dump_metadata", return_value=metadata
+            ), patch(
+                "easysourceflow_core.extractors.video._extract_ytdlp_subtitle",
+                return_value={"transcript": "", "status": "subtitle_unavailable", "subtitle_vtt": ""},
+            ), patch(
+                "easysourceflow_core.extractors.video._extract_bilibili_subtitle",
+                return_value={"transcript": "", "status": "subtitle_unavailable", "subtitle_vtt": ""},
+            ), patch(
+                "easysourceflow_core.extractors.video._transcribe_video_audio",
+                return_value={"transcript": "", "status": "transcription_failed", "subtitle_vtt": ""},
+            ):
+                with self.assertRaises(EasySourceFlowError) as context:
+                    extract_video_document("https://www.bilibili.com/video/BV1mY411U7as", settings)
+
+            self.assertEqual(context.exception.code, "transcript_unavailable")
 
     def test_transcript_match_rejects_numeric_only_and_low_coverage(self):
         metadata = {

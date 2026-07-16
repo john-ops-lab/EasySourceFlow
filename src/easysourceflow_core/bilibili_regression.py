@@ -52,6 +52,7 @@ def _run_sample(sample: dict, manifest_dir: Path, base_url: str, timeout_seconds
     result = job.get("result") or {}
     source = result.get("source") or {}
     metadata = source.get("metadata") or {}
+    provenance = metadata.get("subtitle_provenance") or {}
     origin = str(metadata.get("transcript_origin") or "none")
     expected_origins = sample.get("expected_transcript_origins") or []
     if expected_origins:
@@ -73,6 +74,18 @@ def _run_sample(sample: dict, manifest_dir: Path, base_url: str, timeout_seconds
             "subtitle_language",
             any(subtitle_language.lower().startswith(str(item).lower()) for item in expected_subtitle_languages),
             f"actual={subtitle_language}",
+        )
+    expected_bvid = str(sample.get("expected_bvid") or "")
+    if expected_bvid:
+        _check(checks, "bvid", str(provenance.get("bvid") or "") == expected_bvid, f"actual={provenance.get('bvid')}")
+    maximum_duration_ratio = sample.get("maximum_duration_ratio")
+    if maximum_duration_ratio is not None:
+        duration_ratio = _float_or_none(provenance.get("duration_ratio"))
+        _check(
+            checks,
+            "subtitle_duration_ratio",
+            duration_ratio is not None and duration_ratio <= float(maximum_duration_ratio),
+            f"actual={duration_ratio}",
         )
     summary = str(result.get("summary_markdown") or "")
     if sample.get("expected_summary_language") == "zh":

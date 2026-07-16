@@ -30,7 +30,7 @@ from .url_utils import detect_source_type, normalize_url
 
 
 logger = logging.getLogger(__name__)
-SUMMARY_PIPELINE_VERSION = "2026-07-14-v1"
+SUMMARY_PIPELINE_VERSION = "2026-07-16-v2"
 
 
 class EasySourceFlowService:

@@ -15,6 +15,7 @@ This file tracks real Bilibili videos used to validate subtitle selection, ASR f
 | ID | URL | Expected Path | Checks |
 | --- | --- | --- | --- |
 | `nihaixia-subtitle` | `https://www.bilibili.com/video/BV1mY411U7as` | Chinese subtitle preferred | No unnecessary ASR; key timeline uses summarized points; full timeline link exists. |
+| `wang-defeng-subtitle-identity` | `https://www.bilibili.com/video/BV11v7N6vENd` | Exact WBI Chinese subtitle | BVID/CID match; subtitle ends near 198 seconds; no unrelated 476-second transcript. |
 | `english-to-chinese` | `https://www.bilibili.com/video/BV19CoBYjEFg` | English subtitle or English speech | Chinese summary; Chinese key timeline; full timeline link exists. |
 | `no-subtitle-asr` | `https://www.bilibili.com/video/BV1uRHQeCEyf/` | ASR fallback | Status explains transcription; timestamps are monotonic; poor ASR quality is visible in metadata/status. |
 

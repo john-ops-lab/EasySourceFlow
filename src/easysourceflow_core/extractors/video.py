@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -39,6 +40,10 @@ _BILIBILI_DM_WBI_PARAMS = {
     "dm_cover_img_str": "QU5HTEUgKE5WSURJQSwgTlZJRElBIEdlRm9yY2UgUlRYIDQwNjAgTGFwdG9wIEdQVSAoMHgwMDAwMjhFMCkgRGlyZWN0M0QxMSB2c181XzAgcHNfNV8wLCBEM0QxMSlHb29nbGUgSW5jLiAoTlZJRElBKQ",
     "dm_img_inter": '{"ds":[],"wh":[5231,6067,75],"of":[475,950,475]}',
 }
+_TRANSCRIPT_TIME_PATTERN = r"(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d+)?"
+_TRANSCRIPT_RANGE_RE = re.compile(
+    rf"^\[(?P<start>{_TRANSCRIPT_TIME_PATTERN})\s*(?:-|-->)\s*(?P<end>{_TRANSCRIPT_TIME_PATTERN})\]"
+)
 
 
 def extract_video_document(
@@ -63,36 +68,47 @@ def extract_video_document(
     subtitle_source = ""
     subtitle_language = ""
     subtitle_rejections = ""
+    subtitle_provenance: Dict[str, Any] = {}
 
     _progress(progress_callback, "subtitle", 0.35)
     subtitle_result = _extract_ytdlp_subtitle(ytdlp, canonical_url, source_type, settings, data)
     platform_transcript = subtitle_result.get("transcript") or None
     platform_subtitle_vtt = subtitle_result.get("subtitle_vtt", "")
     subtitle_status = subtitle_result.get("status", "unavailable")
-    if platform_transcript and _platform_transcript_is_usable(platform_transcript, data):
-        transcript = platform_transcript
-        subtitle_vtt = platform_subtitle_vtt
-        subtitle_source = subtitle_result.get("source", "yt_dlp_subtitle")
-        subtitle_language = subtitle_result.get("language", "")
-        content_text = _content_with_transcript(base_content_text, transcript)
-        extraction_method = "yt_dlp_metadata_platform_subtitle"
+    if platform_transcript:
+        platform_validation = _validate_transcript_timing(
+            platform_transcript,
+            _metadata_duration_seconds(data),
+            require_timestamps=True,
+        )
+        if platform_validation["valid"] and not _is_low_value_subtitle(platform_transcript):
+            transcript = platform_transcript
+            subtitle_vtt = platform_subtitle_vtt
+            subtitle_source = subtitle_result.get("source", "yt_dlp_subtitle")
+            subtitle_language = subtitle_result.get("language", "")
+            content_text = _content_with_transcript(base_content_text, transcript)
+            extraction_method = "yt_dlp_metadata_platform_subtitle"
+        else:
+            subtitle_rejections = f"yt_dlp:{platform_validation['reason']}"
+            subtitle_status = f"{subtitle_status}_invalid"
 
     if source_type == "bilibili":
         bilibili_subtitle = _extract_bilibili_subtitle(canonical_url, settings, data)
         if bilibili_subtitle.get("transcript"):
             bilibili_transcript = bilibili_subtitle["transcript"]
-            if _transcript_matches_video(bilibili_transcript, data):
+            if _platform_transcript_is_usable(bilibili_transcript, data):
                 transcript = bilibili_transcript
                 subtitle_vtt = bilibili_subtitle.get("subtitle_vtt", "")
                 subtitle_status = "bilibili_subtitle"
                 subtitle_source = bilibili_subtitle.get("source", "")
                 subtitle_language = bilibili_subtitle.get("language", "")
                 subtitle_rejections = bilibili_subtitle.get("rejections", "")
+                subtitle_provenance = bilibili_subtitle.get("provenance", {})
                 content_text = _content_with_transcript(base_content_text, transcript)
                 extraction_method = "yt_dlp_metadata_bilibili_subtitle"
             else:
                 logger.warning(
-                    "bilibili subtitle rejected as mismatched title=%s status=%s",
+                    "bilibili subtitle rejected by timing validation title=%s status=%s",
                     title,
                     bilibili_subtitle.get("status"),
                 )
@@ -119,17 +135,38 @@ def extract_video_document(
         )
         transcript = transcription.get("transcript") or None
         if transcript:
-            subtitle_vtt = transcription.get("subtitle_vtt", "")
-            content_text = _content_with_transcript(base_content_text, transcript)
-            extraction_method = "yt_dlp_metadata_whisper_transcription"
-            subtitle_status = transcription.get("status", "transcribed")
-            subtitle_source = transcription.get("source", "audio_transcription")
-            subtitle_language = transcription.get("language", "")
+            asr_validation = _validate_transcript_timing(
+                transcript,
+                _metadata_duration_seconds(data),
+                require_timestamps=False,
+            )
+            if asr_validation["valid"]:
+                subtitle_vtt = transcription.get("subtitle_vtt", "")
+                content_text = _content_with_transcript(base_content_text, transcript)
+                extraction_method = "yt_dlp_metadata_whisper_transcription"
+                subtitle_status = transcription.get("status", "transcribed")
+                subtitle_source = transcription.get("source", "audio_transcription")
+                subtitle_language = transcription.get("language", "")
+            else:
+                subtitle_rejections = _append_rejection(
+                    subtitle_rejections,
+                    f"local_asr:{asr_validation['reason']}",
+                )
+                transcript = None
+                subtitle_status = "transcription_invalid"
         else:
             subtitle_status = _combine_status(subtitle_status, transcription.get("status", "transcription_unavailable"))
 
-    if len(content_text) < 40:
-        raise extraction_failed("yt-dlp returned too little public metadata to summarize this video.")
+    if not transcript:
+        raise extraction_error(
+            "transcript_unavailable",
+            "No trustworthy subtitle or local transcription was available for this video.",
+            [
+                "Confirm the video is playable and the platform login state is available.",
+                "Install and configure a local ASR backend, then retry with force refresh.",
+                "Do not summarize video metadata as if it were the spoken content.",
+            ],
+        )
 
     transcript_with_timestamps = transcript or ""
     plain_transcript = _plain_transcript(transcript_with_timestamps)
@@ -139,6 +176,16 @@ def extract_video_document(
         _optional_float(data.get("duration")),
         transcript_origin["origin"],
     )
+    transcript_validation = _validate_transcript_timing(
+        transcript_with_timestamps,
+        _optional_float(data.get("duration")) or 0.0,
+        require_timestamps=transcript_origin["origin"] == "platform_subtitle",
+    )
+    if subtitle_provenance.get("duration_ratio") is not None:
+        transcript_quality["duration_coverage"] = subtitle_provenance["duration_ratio"]
+        transcript_quality["last_timestamp_seconds"] = subtitle_provenance["subtitle_end_seconds"]
+        transcript_validation["duration_ratio"] = subtitle_provenance["duration_ratio"]
+        transcript_validation["last_timestamp_seconds"] = subtitle_provenance["subtitle_end_seconds"]
     return SourceDocument(
         source_url=url,
         canonical_url=canonical_url,
@@ -158,9 +205,11 @@ def extract_video_document(
             "subtitle_source": subtitle_source,
             "subtitle_language": subtitle_language,
             "subtitle_rejections": subtitle_rejections,
+            "subtitle_provenance": subtitle_provenance,
             "transcript_origin": transcript_origin["origin"],
             "transcript_origin_label": transcript_origin["label"],
             "transcript_quality": transcript_quality,
+            "transcript_validation": transcript_validation,
             "subtitle_vtt": subtitle_vtt,
             "transcript_text": plain_transcript,
             "transcript_with_timestamps": transcript_with_timestamps,
@@ -569,7 +618,7 @@ def _extract_bilibili_subtitle(
     url: str,
     settings: Settings,
     metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     bvid = _extract_bvid(url)
     if not bvid:
         return {"transcript": "", "subtitle_vtt": "", "status": "subtitle_unavailable"}
@@ -591,32 +640,47 @@ def _extract_bilibili_subtitle(
         return {"transcript": "", "subtitle_vtt": "", "status": "bilibili_view_api_failed"}
     view_data = view.get("data") or {}
     aid = view_data.get("aid")
+    resolved_bvid = str(view_data.get("bvid") or bvid)
+    if resolved_bvid.lower() != bvid.lower():
+        return {
+            "transcript": "",
+            "subtitle_vtt": "",
+            "status": "bilibili_video_identity_mismatch",
+        }
     pages = view_data.get("pages") or []
     page_index = _bilibili_page_index(url)
-    page = pages[min(page_index, len(pages) - 1)] if pages else {}
+    if page_index < 0 or page_index >= len(pages):
+        return {"transcript": "", "subtitle_vtt": "", "status": "bilibili_page_not_found"}
+    page = pages[page_index]
     cid = page.get("cid")
-    if not aid or not cid:
+    if not cid:
         return {"transcript": "", "subtitle_vtt": "", "status": "subtitle_unavailable"}
+    video_duration = _optional_float(page.get("duration")) or _metadata_duration_seconds(metadata or {})
+
+    if not wbi_keys:
+        return {
+            "transcript": "",
+            "subtitle_vtt": "",
+            "status": "bilibili_wbi_unavailable",
+            "source": "bilibili_wbi_player_v2",
+        }
 
     seen_urls = set()
-    saw_mismatch = False
+    saw_invalid = False
     saw_low_value = False
     saw_player_error = False
     subtitle_api_failed = False
     rejections: List[str] = []
-    player_sources = []
-    if wbi_keys:
-        player_sources.append(
-            (
-                "bilibili_wbi_player_v2",
-                _bilibili_wbi_url(
-                    "https://api.bilibili.com/x/player/wbi/v2",
-                    {"bvid": bvid, "cid": cid, **_BILIBILI_DM_WBI_PARAMS},
-                    wbi_keys,
-                ),
-            )
+    player_sources = [
+        (
+            "bilibili_wbi_player_v2",
+            _bilibili_wbi_url(
+                "https://api.bilibili.com/x/player/wbi/v2",
+                {"bvid": bvid, "cid": cid, **_BILIBILI_DM_WBI_PARAMS},
+                wbi_keys,
+            ),
         )
-    player_sources.append(("bilibili_player_v2", f"https://api.bilibili.com/x/player/v2?aid={aid}&cid={cid}"))
+    ]
 
     for source, player_url in player_sources:
         for attempt in range(3):
@@ -630,7 +694,7 @@ def _extract_bilibili_subtitle(
             subtitle_items = (((player.get("data") or {}).get("subtitle") or {}).get("subtitles") or [])
             if not subtitle_items:
                 break
-            for item in subtitle_items:
+            for item in sorted(subtitle_items, key=_bilibili_subtitle_item_priority):
                 subtitle_url = item.get("subtitle_url")
                 if not subtitle_url:
                     continue
@@ -646,6 +710,13 @@ def _extract_bilibili_subtitle(
                     subtitle_api_failed = True
                     rejections.append(f"{source}:{language or 'unknown'}:api_failed")
                     continue
+                payload_validation = _validate_bilibili_payload_timing(subtitle_payload, video_duration)
+                if not payload_validation["valid"]:
+                    saw_invalid = True
+                    rejections.append(
+                        f"{source}:{language or 'unknown'}:{payload_validation['reason']}"
+                    )
+                    continue
                 candidate = _bilibili_subtitle_payload_to_result(subtitle_payload)
                 candidate["source"] = source
                 candidate["language"] = language
@@ -655,11 +726,32 @@ def _extract_bilibili_subtitle(
                     saw_low_value = True
                     rejections.append(f"{source}:{language or 'unknown'}:low_value")
                     continue
-                if metadata is not None and not _transcript_matches_video(transcript, metadata):
-                    saw_mismatch = True
-                    rejections.append(f"{source}:{language or 'unknown'}:mismatch")
+                validation = _validate_transcript_timing(
+                    transcript,
+                    video_duration,
+                    require_timestamps=True,
+                )
+                if not validation["valid"]:
+                    saw_invalid = True
+                    rejections.append(f"{source}:{language or 'unknown'}:{validation['reason']}")
                     continue
                 candidate["rejections"] = ";".join(rejections)
+                candidate["provenance"] = {
+                    "bvid": bvid,
+                    "aid": aid,
+                    "cid": cid,
+                    "page": page_index + 1,
+                    "video_duration_seconds": round(video_duration, 3) if video_duration else None,
+                    "subtitle_id": str(item.get("id") or item.get("id_str") or ""),
+                    "language": language,
+                    "ai_type": item.get("ai_type"),
+                    "subtitle_end_seconds": payload_validation["last_timestamp_seconds"],
+                    "duration_ratio": payload_validation["duration_ratio"],
+                    "content_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+                    "subtitle_url_sha256": hashlib.sha256(
+                        urllib.parse.urlsplit(subtitle_url)._replace(query="", fragment="").geturl().encode("utf-8")
+                    ).hexdigest(),
+                }
                 return candidate
 
             if attempt < 2:
@@ -667,8 +759,8 @@ def _extract_bilibili_subtitle(
 
     source_text = ",".join(source for source, _ in player_sources)
     rejection_text = ";".join(rejections)
-    if saw_mismatch:
-        status = "bilibili_subtitle_mismatch"
+    if saw_invalid:
+        status = "bilibili_subtitle_invalid"
     elif saw_low_value:
         status = "bilibili_subtitle_low_value"
     elif subtitle_api_failed:
@@ -714,9 +806,28 @@ def _bilibili_page_index(url: str) -> int:
     parsed = urllib.parse.urlparse(url)
     query = urllib.parse.parse_qs(parsed.query)
     try:
-        return max(0, int((query.get("p") or ["1"])[0]) - 1)
+        page_number = int((query.get("p") or ["1"])[0])
+        return page_number - 1 if page_number >= 1 else -1
     except (TypeError, ValueError):
-        return 0
+        return -1
+
+
+def _bilibili_subtitle_item_priority(item: Dict[str, Any]) -> tuple[int, str]:
+    language = str(item.get("lan") or item.get("lan_doc") or "").lower()
+    chinese = language.startswith(("zh", "cmn", "yue")) or "中文" in language
+    try:
+        automatic = int(item.get("ai_type") or 0) != 0
+    except (TypeError, ValueError):
+        automatic = bool(item.get("ai_type"))
+    if chinese and not automatic:
+        rank = 0
+    elif chinese:
+        rank = 1
+    elif not automatic:
+        rank = 2
+    else:
+        rank = 3
+    return rank, language
 
 
 def _bilibili_subtitle_payload_to_result(subtitle_payload: Dict[str, Any]) -> Dict[str, str]:
@@ -728,7 +839,7 @@ def _bilibili_subtitle_payload_to_result(subtitle_payload: Dict[str, Any]) -> Di
         if not content:
             continue
         start = _format_seconds(entry.get("from"))
-        end = _format_seconds(entry.get("to"))
+        end = _format_seconds(entry.get("to"), round_up=True)
         prefix = f"[{start}-{end}] " if start and end else ""
         lines.append(prefix + content)
         if start and end:
@@ -738,6 +849,63 @@ def _bilibili_subtitle_payload_to_result(subtitle_payload: Dict[str, Any]) -> Di
         "transcript": transcript,
         "subtitle_vtt": _segments_to_vtt(vtt_segments),
         "status": "bilibili_subtitle",
+    }
+
+
+def _validate_bilibili_payload_timing(subtitle_payload: Dict[str, Any], duration_seconds: float) -> Dict[str, Any]:
+    timestamp_count = 0
+    previous_start = -1.0
+    last_end = 0.0
+    for entry in subtitle_payload.get("body") or []:
+        if not str(entry.get("content") or "").strip():
+            continue
+        try:
+            start = float(entry.get("from"))
+            end = float(entry.get("to"))
+        except (TypeError, ValueError):
+            return _bilibili_payload_timing_report(
+                "invalid_timestamp_range", timestamp_count, last_end, duration_seconds
+            )
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            return _bilibili_payload_timing_report(
+                "invalid_timestamp_range", timestamp_count, last_end, duration_seconds
+            )
+        if start < previous_start:
+            return _bilibili_payload_timing_report(
+                "timestamps_not_monotonic", timestamp_count, last_end, duration_seconds
+            )
+        timestamp_count += 1
+        previous_start = start
+        last_end = max(last_end, end)
+
+    if timestamp_count == 0:
+        reason = "timestamps_missing"
+    else:
+        duration = max(0.0, float(duration_seconds or 0.0))
+        tolerance = max(5.0, duration * 0.03) if duration else 0.0
+        if duration and last_end > duration + tolerance:
+            reason = "duration_exceeded"
+        elif duration >= 300 and last_end < min(180.0, duration * 0.15):
+            reason = "insufficient_coverage"
+        else:
+            reason = "ok"
+    return _bilibili_payload_timing_report(reason, timestamp_count, last_end, duration_seconds)
+
+
+def _bilibili_payload_timing_report(
+    reason: str,
+    timestamp_count: int,
+    last_end: float,
+    duration_seconds: float,
+) -> Dict[str, Any]:
+    duration = max(0.0, float(duration_seconds or 0.0))
+    ratio = last_end / duration if duration and timestamp_count else None
+    return {
+        "valid": reason == "ok",
+        "reason": reason,
+        "timestamp_count": timestamp_count,
+        "last_timestamp_seconds": round(last_end, 3) if timestamp_count else None,
+        "duration_ratio": round(ratio, 4) if ratio is not None else None,
     }
 
 
@@ -991,37 +1159,75 @@ def _transcription_files_to_result(tmp: Path, status: str) -> Dict[str, str]:
 
 
 def _transcript_matches_video(transcript: str, metadata: Dict[str, Any]) -> bool:
-    if _is_low_value_subtitle(transcript):
-        return False
-    duration = _metadata_duration_seconds(metadata)
-    coverage = _transcript_coverage_seconds(transcript)
-    if duration and duration >= 300 and coverage and coverage < min(180, duration * 0.15):
-        return False
-    haystack = transcript[:1200]
-    fields = [
-        str(metadata.get("title") or ""),
-        str(metadata.get("description") or ""),
-        " ".join(str(tag) for tag in (metadata.get("tags") or [])),
-    ]
-    tokens = set()
-    for field in fields:
-        for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{4,}|\d{2,}", field):
-            if token not in {"Description", "Title", "Duration"} and not token.isdigit():
-                tokens.add(token.lower())
-    if not tokens:
-        return True
-    matches = sum(1 for token in tokens if token in haystack.lower())
-    return matches >= 1
+    return _platform_transcript_is_usable(transcript, metadata)
 
 
 def _platform_transcript_is_usable(transcript: str, metadata: Dict[str, Any]) -> bool:
     if _is_low_value_subtitle(transcript):
         return False
-    duration = _metadata_duration_seconds(metadata)
-    coverage = _transcript_coverage_seconds(transcript)
-    if duration and duration >= 300 and coverage and coverage < min(180, duration * 0.15):
-        return False
-    return True
+    return bool(
+        _validate_transcript_timing(
+            transcript,
+            _metadata_duration_seconds(metadata),
+            require_timestamps=True,
+        )["valid"]
+    )
+
+
+def _validate_transcript_timing(
+    transcript: str,
+    duration_seconds: float,
+    *,
+    require_timestamps: bool,
+) -> Dict[str, Any]:
+    timestamp_count = 0
+    previous_start = -1.0
+    last_end = 0.0
+    monotonic = True
+    structurally_valid = True
+    for raw_line in transcript.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _TRANSCRIPT_RANGE_RE.match(line)
+        if not match:
+            continue
+        start = _timestamp_to_seconds(match.group("start"))
+        end = _timestamp_to_seconds(match.group("end"))
+        timestamp_count += 1
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            structurally_valid = False
+            continue
+        if start < previous_start:
+            monotonic = False
+        previous_start = start
+        last_end = max(last_end, end)
+
+    duration = max(0.0, float(duration_seconds or 0.0))
+    tolerance = max(5.0, duration * 0.03) if duration else 0.0
+    duration_ratio = last_end / duration if duration and timestamp_count else None
+    reason = "ok"
+    if require_timestamps and timestamp_count == 0:
+        reason = "timestamps_missing"
+    elif not structurally_valid:
+        reason = "invalid_timestamp_range"
+    elif not monotonic:
+        reason = "timestamps_not_monotonic"
+    elif duration and last_end > duration + tolerance:
+        reason = "duration_exceeded"
+    elif duration >= 300 and last_end and last_end < min(180.0, duration * 0.15):
+        reason = "insufficient_coverage"
+
+    return {
+        "valid": reason == "ok",
+        "reason": reason,
+        "timestamp_count": timestamp_count,
+        "timestamps_monotonic": monotonic,
+        "last_timestamp_seconds": round(last_end, 3) if timestamp_count else None,
+        "duration_seconds": round(duration, 3) if duration else None,
+        "duration_ratio": round(duration_ratio, 4) if duration_ratio is not None else None,
+        "duration_tolerance_seconds": round(tolerance, 3) if duration else None,
+    }
 
 
 def _metadata_duration_seconds(metadata: Dict[str, Any]) -> float:
@@ -1032,19 +1238,21 @@ def _metadata_duration_seconds(metadata: Dict[str, Any]) -> float:
 
 
 def _transcript_coverage_seconds(transcript: str) -> float:
-    max_seconds = 0.0
-    for match in re.finditer(r"\[(\d{1,2}:)?\d{2}:\d{2}-(?P<end>(?:\d{1,2}:)?\d{2}:\d{2})\]", transcript):
-        max_seconds = max(max_seconds, _timestamp_to_seconds(match.group("end")))
-    return max_seconds
+    report = _validate_transcript_timing(transcript, 0.0, require_timestamps=False)
+    return float(report["last_timestamp_seconds"] or 0.0)
 
 
 def _timestamp_to_seconds(value: str) -> float:
-    parts = [int(part) for part in value.split(":")]
+    parts = [float(part) for part in value.split(":")]
     if len(parts) == 2:
         return parts[0] * 60 + parts[1]
     if len(parts) == 3:
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
     return 0.0
+
+
+def _append_rejection(current: str, rejection: str) -> str:
+    return ";".join(part for part in [current, rejection] if part)
 
 
 def _is_low_value_subtitle(transcript: str) -> bool:
@@ -1116,12 +1324,12 @@ def _compact_timestamp(value: str) -> str:
     return cleaned
 
 
-def _format_seconds(value: object) -> str:
+def _format_seconds(value: object, *, round_up: bool = False) -> str:
     try:
         seconds = float(value)
     except (TypeError, ValueError):
         return ""
-    total = int(seconds)
+    total = math.ceil(seconds) if round_up else int(seconds)
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
