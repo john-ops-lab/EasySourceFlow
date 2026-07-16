@@ -33,7 +33,12 @@ from easysourceflow_core.extractors.video import (
     _youtube_subtitle_languages,
     extract_video_document,
 )
-from easysourceflow_core.digest import _append_video_timeline, _build_summary_prompt, _ensure_required_sections
+from easysourceflow_core.digest import (
+    _append_video_timeline,
+    _build_summary_prompt,
+    _ensure_required_sections,
+    _model_response_text,
+)
 from easysourceflow_core.digest import digest_document, digest_with_provider
 from easysourceflow_core.url_utils import normalize_url
 
@@ -162,7 +167,16 @@ class CoreTests(unittest.TestCase):
             response.read.return_value = json.dumps(
                 {
                     "model": "doubao-seed-2-0-lite-260215",
-                    "output": [{"content": [{"type": "output_text", "text": "## 一句话结论\n豆包已调用"}]}],
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "content": [{"type": "text", "text": "内部推理不得展示"}],
+                        },
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "## 一句话结论\n豆包已调用"}],
+                        },
+                    ],
                 }
             ).encode("utf-8")
             context = MagicMock()
@@ -177,7 +191,91 @@ class CoreTests(unittest.TestCase):
             self.assertIn("input", payload)
             self.assertNotIn("messages", payload)
             self.assertIn("豆包已调用", result.summary_markdown)
+            self.assertNotIn("内部推理不得展示", result.summary_markdown)
             self.assertIn("Provider: 火山方舟 / 豆包", result.summary_markdown)
+
+    def test_minimax_separates_and_removes_reasoning_from_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "MiniMax-M2.7",
+                    "deepseek_api_key": "EXAMPLE_API_KEY",
+                    "deepseek_base_url": "https://api.minimaxi.com/v1",
+                }
+            )
+            document = SourceDocument(
+                source_url="https://example.com/minimax",
+                canonical_url="https://example.com/minimax",
+                source_type="web",
+                title="MiniMax Test",
+                author=None,
+                published_at=None,
+                language="zh",
+                content_text="这是一段用于验证 MiniMax 推理内容不会进入总结的来源内容。",
+                content_markdown="测试",
+                metadata={},
+                extraction_method="test",
+            )
+            response = MagicMock()
+            response.read.return_value = json.dumps(
+                {
+                    "model": "MiniMax-M2.7",
+                    "choices": [
+                        {
+                            "message": {
+                                "reasoning_details": [{"type": "reasoning.text", "text": "独立推理不得展示"}],
+                                "content": (
+                                    "<think>这里复述了系统提示词和用户提示词。</think>\n"
+                                    "下面是最终答案：\n"
+                                    "## 一句话结论\nMiniMax 最终总结"
+                                ),
+                            }
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+            context = MagicMock()
+            context.__enter__.return_value = response
+            context.__exit__.return_value = False
+            with patch("easysourceflow_core.digest.urlopen", return_value=context) as opened:
+                result = digest_with_provider(settings, document)
+
+            request = opened.call_args.args[0]
+            payload = json.loads(request.data.decode("utf-8"))
+            self.assertTrue(payload["reasoning_split"])
+            self.assertEqual(payload["max_completion_tokens"], 8192)
+            self.assertEqual(payload["temperature"], 1.0)
+            self.assertIn("只输出最终 Markdown 总结", payload["messages"][0]["content"])
+            self.assertIn("MiniMax 最终总结", result.summary_markdown)
+            self.assertNotIn("<think>", result.summary_markdown)
+            self.assertNotIn("复述了系统提示词", result.summary_markdown)
+            self.assertNotIn("独立推理不得展示", result.summary_markdown)
+            self.assertNotIn("下面是最终答案", result.summary_markdown)
+
+    def test_model_response_parser_ignores_separate_reasoning_fields(self):
+        text = _model_response_text(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "reasoning_content": "DeepSeek 内部推理",
+                            "reasoning": "本地模型内部推理",
+                            "content": [
+                                {"type": "text", "text": "分析前言，不应保留"},
+                                {"type": "text", "text": "## 一句话结论\n只保留最终总结"},
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        self.assertEqual(text, "## 一句话结论\n只保留最终总结")
+
+    def test_model_response_parser_rejects_unclosed_reasoning_markup(self):
+        with self.assertRaisesRegex(RuntimeError, "reasoning markup"):
+            _model_response_text({"choices": [{"message": {"content": "<think>未闭合的推理"}}]})
 
     def test_asr_quality_reports_error_rate_and_timestamp_coverage(self):
         report = evaluate_transcript(
@@ -1434,6 +1532,147 @@ class CoreTests(unittest.TestCase):
                 result = _check_deepseek(settings)
         self.assertFalse(result["ok"])
         self.assertIn("invalid api key", result["message"])
+
+    def test_deepseek_health_disables_thinking_for_short_probe(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "deepseek",
+                    "deepseek_api_key": "test-key",
+                }
+            )
+            with patch("easysourceflow_core.health.urlopen", side_effect=fake_urlopen):
+                result = _check_deepseek(settings)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["thinking"], {"type": "disabled"})
+        self.assertEqual(captured["max_tokens"], 128)
+        self.assertNotIn("temperature", captured)
+
+    def test_model_health_accepts_reasoning_only_probe(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"working"}}]}'
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "reasoning-model",
+                    "deepseek_api_key": "test-key",
+                    "deepseek_base_url": "https://api.openai.com/v1",
+                }
+            )
+            with patch("easysourceflow_core.health.urlopen", side_effect=fake_urlopen):
+                result = _check_deepseek(settings)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("reasoning output", result["message"])
+        self.assertEqual(captured["max_completion_tokens"], 128)
+        self.assertNotIn("max_tokens", captured)
+        self.assertNotIn("thinking", captured)
+
+    def test_minimax_health_requests_split_reasoning(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok","reasoning_details":[{"text":"working"}]}}]}'
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "MiniMax-M2.7",
+                    "deepseek_api_key": "test-key",
+                    "deepseek_base_url": "https://api.minimaxi.com/v1",
+                }
+            )
+            with patch("easysourceflow_core.health.urlopen", side_effect=fake_urlopen):
+                result = _check_deepseek(settings)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(captured["reasoning_split"])
+        self.assertEqual(captured["max_completion_tokens"], 128)
+        self.assertNotIn("max_tokens", captured)
+
+    def test_responses_model_health_accepts_reasoning_evidence(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return (
+                    b'{"status":"incomplete","output":[{"type":"reasoning","summary":[]}],'
+                    b'"usage":{"output_tokens_details":{"reasoning_tokens":12}}}'
+                )
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "responses-model",
+                    "deepseek_api_key": "test-key",
+                    "deepseek_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+                }
+            )
+            with patch("easysourceflow_core.health.urlopen", side_effect=fake_urlopen):
+                result = _check_deepseek(settings)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["max_output_tokens"], 128)
+        self.assertNotIn("max_tokens", captured)
 
 
 def _minimal_docx(*paragraphs):

@@ -7,10 +7,11 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .config import Settings, effective_bilibili_cookies_file, effective_youtube_cookies_file
-from .digest import _model_api_ready, _model_response_text, _model_temperature, _uses_responses_api
+from .digest import _model_api_ready, _model_response_text, _uses_responses_api
 
 
 def run_health_checks(settings: Settings) -> dict:
@@ -62,11 +63,18 @@ def _check_deepseek(settings: Settings) -> dict:
     if not _model_api_ready(settings):
         return _result("deepseek_api", False, "Model API key is not configured.", required=True, fix="Add EASYSOURCEFLOW_MODEL_API_KEY to .env or configure it in Web.")
     uses_responses_api = _uses_responses_api(settings)
-    payload = {"model": settings.model, "temperature": _model_temperature(settings)}
+    payload = {"model": settings.model}
+    model_host = (urlparse(settings.model_base_url).hostname or "").lower()
     if uses_responses_api:
-        payload.update({"input": "只回复 ok", "max_output_tokens": 8})
+        payload.update({"input": "只回复 ok", "max_output_tokens": 128})
     else:
-        payload.update({"messages": [{"role": "user", "content": "只回复 ok"}], "max_tokens": 8})
+        completion_token_hosts = {"api.openai.com", "api.minimax.io", "api.minimaxi.com"}
+        token_limit_key = "max_completion_tokens" if model_host in completion_token_hosts else "max_tokens"
+        payload.update({"messages": [{"role": "user", "content": "只回复 ok"}], token_limit_key: 128})
+        if model_host == "api.deepseek.com":
+            payload["thinking"] = {"type": "disabled"}
+        elif model_host in {"api.minimax.io", "api.minimaxi.com"}:
+            payload["reasoning_split"] = True
     headers = {"content-type": "application/json"}
     if settings.model_api_key:
         headers["authorization"] = "Bearer " + settings.model_api_key
@@ -80,13 +88,53 @@ def _check_deepseek(settings: Settings) -> dict:
         with urlopen(request, timeout=20) as response:
             data = json.loads(response.read().decode("utf-8"))
         content = _model_response_text(data) if isinstance(data, dict) else ""
-        if not content:
-            error = data.get("error") if isinstance(data, dict) else None
-            message = error.get("message") if isinstance(error, dict) else "Model API response did not include a chat completion."
-            return _result("deepseek_api", False, f"Model API check failed: {message}", required=True, fix="Check API key validity, model name, quota, and EASYSOURCEFLOW_MODEL_BASE_URL.")
-        return _result("deepseek_api", True, "Model API is reachable.", required=True)
+        if content:
+            return _result("deepseek_api", True, "Model API is reachable.", required=True)
+        if isinstance(data, dict) and _has_model_generation_evidence(data):
+            return _result(
+                "deepseek_api",
+                True,
+                "Model API is reachable; the short probe returned reasoning output.",
+                required=True,
+            )
+        error = data.get("error") if isinstance(data, dict) else None
+        message = error.get("message") if isinstance(error, dict) else "Model API response did not include a chat completion."
+        return _result("deepseek_api", False, f"Model API check failed: {message}", required=True, fix="Check API key validity, model name, quota, and EASYSOURCEFLOW_MODEL_BASE_URL.")
     except Exception as exc:
         return _result("deepseek_api", False, f"Model API check failed: {type(exc).__name__}.", required=True, fix="Check network access, API quota, EASYSOURCEFLOW_MODEL_BASE_URL, and EASYSOURCEFLOW_MODEL_API_KEY.")
+
+
+def _has_model_generation_evidence(data: dict) -> bool:
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                if any(
+                    _non_empty_generation_value(message.get(key))
+                    for key in ("reasoning_content", "reasoning_details", "reasoning")
+                ):
+                    return True
+    output = data.get("output")
+    if isinstance(output, list) and any(isinstance(item, dict) and item.get("type") == "reasoning" for item in output):
+        return True
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        for key in ("completion_tokens_details", "output_tokens_details"):
+            details = usage.get(key)
+            if isinstance(details, dict):
+                reasoning_tokens = details.get("reasoning_tokens")
+                if isinstance(reasoning_tokens, (int, float)) and reasoning_tokens > 0:
+                    return True
+    return False
+
+
+def _non_empty_generation_value(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, (list, dict)) and bool(value)
 
 
 def _check_ytdlp(settings: Settings) -> dict:
