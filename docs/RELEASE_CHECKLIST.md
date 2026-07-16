@@ -58,7 +58,17 @@ zsh -n scripts/easysourceflow
 
 For workflow changes, parse the YAML and confirm full-history checkout uses `fetch-depth: 0`. Pin downloaded security tools and validate their checksums.
 
-## 4. Publish a Version
+## 4. Decide the Release Boundary
+
+`CHANGELOG.md` 的“未发布”表示代码可以已经进入 `main`，但尚未归属到版本标签和 GitHub Release。不要把标签创建后的改动反向追加到旧版本说明。
+
+- `PATCH`：仅包含向后兼容的缺陷修复。
+- `MINOR`：增加向后兼容的用户能力，或完成一组可独立交付的体验升级。
+- `MAJOR`：包含不兼容的公共接口、配置或数据格式变化；`1.0.0` 之前仍需在发布说明中明确兼容影响。
+
+普通开发提交不要求逐次发布。稳定的用户可见能力或一组完整修复进入 `main`、测试和文档完成后，应明确决定下一个语义化版本，不应长期只保留在“未发布”。
+
+## 5. Publish a Version
 
 EasySourceFlow follows semantic versioning. The single version source is `src/easysourceflow_core/__init__.py`; package metadata, HTTP, and MCP read it automatically.
 
@@ -73,7 +83,7 @@ Before publishing a release:
 
 Do not reuse or move an existing public version tag. Fix a released version with a new patch version instead.
 
-## 5. Push and Verify the Remote
+## 6. Push and Verify the Remote
 
 - Confirm the GitHub account, repository, visibility, and default branch.
 - Push only after local scans and tests pass.
@@ -82,7 +92,7 @@ Do not reuse or move an existing public version tag. Fix a released version with
 - Inspect the remote tree to confirm private and ignored files are absent.
 - Do not install or use GitHub plugins without user approval.
 
-## 6. History Rewrite Procedure
+## 7. History Rewrite Procedure
 
 Rewrite public history only when necessary and only after explicit user approval.
 
@@ -97,7 +107,7 @@ Rewrite public history only when necessary and only after explicit user approval
 
 GitHub may temporarily retain unreachable objects addressable by their old SHA. Report this limitation; contact GitHub Support only when immediate removal is required for genuinely sensitive data.
 
-## 7. Shell and Verification Pitfalls
+## 8. Shell and Verification Pitfalls
 
 - Check each command's exit status; do not let a later successful command hide an earlier failure.
 - In zsh, do not use `path` as a loop variable because it changes the command search path.

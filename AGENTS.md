@@ -53,4 +53,5 @@ Keep secrets in `.env` or the launchd runtime config, never in docs, tests, logs
 - Never publish credentials, cookies, `.env`, databases, logs, outputs, backups, or private workspace data.
 - Run Gitleaks with redacted output and scan staged public files for local paths and personal identifiers.
 - Verify the exact staged file set before committing and confirm GitHub Actions after pushing.
+- Keep post-tag changes under `CHANGELOG.md` 的“未发布”；稳定的用户可见能力或完整修复集通过验证后，按语义化版本发布新版本，不得把后续代码写入旧版本说明。
 - Never rewrite shared history or force-push without explicit user approval. For an approved rewrite, use `--force-with-lease`, never plain `--force`.
