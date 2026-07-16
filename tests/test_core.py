@@ -28,6 +28,7 @@ from easysourceflow_core.extractors.video import (
     _extract_bilibili_subtitle,
     _extract_ytdlp_subtitle,
     _platform_transcript_is_usable,
+    _resolved_bilibili_video_url,
     _transcript_matches_video,
     _validate_transcript_timing,
     _youtube_failure_status,
@@ -1279,6 +1280,79 @@ class CoreTests(unittest.TestCase):
             self.assertIn("mismatch", document.metadata["subtitle_rejections"])
             self.assertIn("黄帝内经", document.content_text)
 
+    def test_bilibili_short_link_uses_verified_resolved_url_without_asr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            short_url = "https://b23.tv/example"
+            resolved_url = "https://www.bilibili.com/video/BV1V4Te6MEAu"
+            metadata = {
+                "id": "BV1V4Te6MEAu_p1",
+                "title": "AI巨头们之间的资本混战，到底是个什么情况？",
+                "duration": 1168,
+                "extractor": "BiliBili",
+                "webpage_url": resolved_url + "?p=1&share_session_id=private-value",
+                "subtitles": {},
+                "automatic_captions": {},
+            }
+            transcript = (
+                "[00:00-00:10] 这段视频解释人工智能公司的资本合作关系。\n"
+                "[19:20-19:28] 最后总结不同公司之间投资与竞争并存。"
+            )
+            with patch("easysourceflow_core.extractors.video._find_ytdlp", return_value="/test/yt-dlp"), patch(
+                "easysourceflow_core.extractors.video._dump_metadata", return_value=metadata
+            ), patch(
+                "easysourceflow_core.extractors.video._extract_ytdlp_subtitle",
+                return_value={"transcript": "", "status": "no_requested_language_subtitles", "subtitle_vtt": ""},
+            ), patch(
+                "easysourceflow_core.extractors.video._extract_bilibili_subtitle",
+                return_value={
+                    "transcript": transcript,
+                    "status": "bilibili_subtitle",
+                    "subtitle_vtt": "WEBVTT\n",
+                    "source": "bilibili_wbi_player_v2",
+                    "language": "中文",
+                    "provenance": {
+                        "bvid": "BV1V4Te6MEAu",
+                        "subtitle_end_seconds": 1168.0,
+                        "duration_ratio": 1.0,
+                    },
+                },
+            ) as bilibili_subtitle, patch(
+                "easysourceflow_core.extractors.video._transcribe_video_audio"
+            ) as transcribe:
+                document = extract_video_document(short_url, settings)
+
+            bilibili_subtitle.assert_called_once()
+            self.assertEqual(bilibili_subtitle.call_args.args[0], resolved_url)
+            transcribe.assert_not_called()
+            self.assertEqual(document.source_url, short_url)
+            self.assertEqual(document.canonical_url, resolved_url)
+            self.assertEqual(document.metadata["webpage_url"], resolved_url)
+            self.assertEqual(document.metadata["raw_metadata"]["webpage_url"], resolved_url)
+
+    def test_resolved_bilibili_url_preserves_page_and_rejects_external_metadata(self):
+        self.assertEqual(
+            _resolved_bilibili_video_url(
+                "https://b23.tv/example",
+                {"webpage_url": "https://www.bilibili.com/video/BV1V4Te6MEAu?p=2&share_source=COPY"},
+            ),
+            "https://www.bilibili.com/video/BV1V4Te6MEAu?p=2",
+        )
+        self.assertEqual(
+            _resolved_bilibili_video_url(
+                "https://www.bilibili.com/video/BV1V4Te6MEAu?spm_id_from=example",
+                {"webpage_url": "https://www.bilibili.com/video/BV1other"},
+            ),
+            "https://www.bilibili.com/video/BV1V4Te6MEAu?spm_id_from=example",
+        )
+        self.assertEqual(
+            _resolved_bilibili_video_url(
+                "https://b23.tv/example",
+                {"webpage_url": "https://example.com/video/BV1V4Te6MEAu?p=2"},
+            ),
+            "",
+        )
+
     def test_youtube_subtitle_priority_prefers_manual_chinese_and_original_auto(self):
         metadata = {
             "language": "en",
@@ -1550,6 +1624,8 @@ class CoreTests(unittest.TestCase):
                     extract_video_document("https://www.bilibili.com/video/BV1mY411U7as", settings)
 
             self.assertEqual(context.exception.code, "transcript_unavailable")
+            self.assertIn("subtitle=subtitle_unavailable", context.exception.message)
+            self.assertIn("transcription=transcription_failed", context.exception.message)
 
     def test_transcript_match_rejects_numeric_only_and_low_coverage(self):
         metadata = {

@@ -56,10 +56,15 @@ def extract_video_document(
     source_type = detect_source_type(canonical_url)
     _progress(progress_callback, "metadata", 0.20)
     data = _dump_metadata(ytdlp, canonical_url, source_type, settings)
+    resolved_video_url = canonical_url
+    if source_type == "bilibili":
+        resolved_bilibili_url = _resolved_bilibili_video_url(canonical_url, data)
+        if resolved_bilibili_url:
+            resolved_video_url = resolved_bilibili_url
 
-    title = str(data.get("title") or canonical_url)
+    title = str(data.get("title") or resolved_video_url)
     uploader = data.get("uploader") or data.get("channel")
-    content_text = _metadata_to_text(data, canonical_url)
+    content_text = _metadata_to_text(data, resolved_video_url)
     base_content_text = content_text
     extraction_method = "yt_dlp_metadata"
     transcript: Optional[str] = None
@@ -93,7 +98,7 @@ def extract_video_document(
             subtitle_status = f"{subtitle_status}_invalid"
 
     if source_type == "bilibili":
-        bilibili_subtitle = _extract_bilibili_subtitle(canonical_url, settings, data)
+        bilibili_subtitle = _extract_bilibili_subtitle(resolved_video_url, settings, data)
         if bilibili_subtitle.get("transcript"):
             bilibili_transcript = bilibili_subtitle["transcript"]
             if _platform_transcript_is_usable(bilibili_transcript, data):
@@ -123,6 +128,8 @@ def extract_video_document(
             subtitle_language = bilibili_subtitle.get("language", "")
             subtitle_rejections = bilibili_subtitle.get("rejections", "")
 
+    subtitle_attempt_status = subtitle_status
+    transcription_status = "not_attempted"
     if not transcript:
         _progress(progress_callback, "audio_download", 0.45)
         transcription = _transcribe_video_audio(
@@ -133,6 +140,7 @@ def extract_video_document(
             data,
             progress_callback,
         )
+        transcription_status = str(transcription.get("status") or "transcription_unavailable")
         transcript = transcription.get("transcript") or None
         if transcript:
             asr_validation = _validate_transcript_timing(
@@ -148,6 +156,7 @@ def extract_video_document(
                 subtitle_source = transcription.get("source", "audio_transcription")
                 subtitle_language = transcription.get("language", "")
             else:
+                transcription_status = f"{transcription_status}:{asr_validation['reason']}"
                 subtitle_rejections = _append_rejection(
                     subtitle_rejections,
                     f"local_asr:{asr_validation['reason']}",
@@ -160,7 +169,10 @@ def extract_video_document(
     if not transcript:
         raise extraction_error(
             "transcript_unavailable",
-            "No trustworthy subtitle or local transcription was available for this video.",
+            (
+                "No trustworthy subtitle or local transcription was available for this video. "
+                f"Diagnostics: subtitle={subtitle_attempt_status}; transcription={transcription_status}."
+            ),
             [
                 "Confirm the video is playable and the platform login state is available.",
                 "Install and configure a local ASR backend, then retry with force refresh.",
@@ -186,9 +198,15 @@ def extract_video_document(
         transcript_quality["last_timestamp_seconds"] = subtitle_provenance["subtitle_end_seconds"]
         transcript_validation["duration_ratio"] = subtitle_provenance["duration_ratio"]
         transcript_validation["last_timestamp_seconds"] = subtitle_provenance["subtitle_end_seconds"]
+    metadata_webpage_url = resolved_video_url if resolved_video_url != canonical_url else str(
+        data.get("webpage_url") or canonical_url
+    )
+    raw_metadata = _compact_raw_metadata(data)
+    if "webpage_url" in raw_metadata:
+        raw_metadata["webpage_url"] = metadata_webpage_url
     return SourceDocument(
         source_url=url,
-        canonical_url=canonical_url,
+        canonical_url=resolved_video_url,
         source_type=source_type,
         title=title,
         author=str(uploader) if uploader else None,
@@ -199,7 +217,7 @@ def extract_video_document(
         metadata={
             "duration": str(data.get("duration") or ""),
             "extractor": str(data.get("extractor") or ""),
-            "webpage_url": str(data.get("webpage_url") or canonical_url),
+            "webpage_url": metadata_webpage_url,
             "transcript_has_timestamps": str(bool(transcript and "[" in transcript[:40])),
             "subtitle_status": subtitle_status,
             "subtitle_source": subtitle_source,
@@ -213,7 +231,7 @@ def extract_video_document(
             "subtitle_vtt": subtitle_vtt,
             "transcript_text": plain_transcript,
             "transcript_with_timestamps": transcript_with_timestamps,
-            "raw_metadata": _compact_raw_metadata(data),
+            "raw_metadata": raw_metadata,
         },
         extraction_method=extraction_method,
     )
@@ -612,6 +630,29 @@ def _most_actionable_youtube_status(statuses: List[str]) -> str:
         if status in statuses:
             return status
     return next((status for status in statuses if status), "subtitle_unavailable")
+
+
+def _resolved_bilibili_video_url(url: str, metadata: Dict[str, Any]) -> str:
+    if _extract_bvid(url):
+        return url
+
+    webpage_url = str(metadata.get("webpage_url") or "").strip()
+    try:
+        parsed = urllib.parse.urlparse(webpage_url)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if host != "bilibili.com" and not host.endswith(".bilibili.com"):
+        return ""
+
+    bvid = _extract_bvid(webpage_url)
+    page_index = _bilibili_page_index(webpage_url)
+    if not bvid or page_index < 0:
+        return ""
+    resolved = f"https://www.bilibili.com/video/{bvid}"
+    if page_index > 0:
+        resolved += f"?p={page_index + 1}"
+    return resolved
 
 
 def _extract_bilibili_subtitle(
