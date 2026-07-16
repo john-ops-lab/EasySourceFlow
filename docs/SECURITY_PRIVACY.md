@@ -50,6 +50,10 @@ Cookies and API keys
 
 - 默认拒绝 localhost、`127.0.0.1`、私有 IP、link-local 地址。
 - 只有通过 `EASYSOURCEFLOW_ALLOW_LOCAL_URLS` 显式开启才允许本地 URL。
+- fake-ip trusted 模式默认关闭；启用后只允许域名解析到用户明确配置的非公网 CIDR，直接输入保留 IP 仍会拒绝。
+- 默认 fake-ip 网段只有 `198.18.0.0/15`，其他网段必须在 Web 或配置文件中明确添加。
+- loopback、link-local、multicast、unspecified 和全球可路由网段不能加入 fake-ip 信任清单。
+- 普通网页每次 HTTP 重定向都会重新校验目标 URL。DNS 校验仍是纵深防御而非完整网络沙箱，不应把服务暴露到不可信网络。
 
 ### 3.3 Cookies 泄露
 

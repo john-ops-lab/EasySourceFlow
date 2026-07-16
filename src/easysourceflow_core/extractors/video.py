@@ -46,7 +46,7 @@ def extract_video_document(
     settings: Settings,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> SourceDocument:
-    canonical_url = normalize_url(url, settings.allow_local_urls)
+    canonical_url = normalize_url(url, settings.allow_local_urls, settings.trusted_fake_ip_cidrs)
     ytdlp = _find_ytdlp(settings)
     source_type = detect_source_type(canonical_url)
     _progress(progress_callback, "metadata", 0.20)

@@ -398,6 +398,13 @@ class CoreTests(unittest.TestCase):
         self.assertIn('id="download-panel"', page)
         self.assertIn('id="download-form"', page)
         self.assertIn("音视频下载", page)
+        self.assertIn('id="readiness-button"', page)
+        self.assertIn('id="model-credential-list"', page)
+        self.assertIn("/model/credentials/delete", page)
+        self.assertIn('data-maintenance-tab="network-maintenance"', page)
+        self.assertIn('id="fake-ip-trust-enabled"', page)
+        self.assertIn("/network/security", page)
+        self.assertIn("window.open(new URL('#results'", page)
 
     def test_media_download_command_uses_controlled_video_options(self):
         with tempfile.TemporaryDirectory() as tmp:

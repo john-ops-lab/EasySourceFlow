@@ -328,6 +328,59 @@ class HttpAndMcpTests(unittest.TestCase):
                 try:
                     with urlopen(f"http://127.0.0.1:{api_server.server_port}/model", timeout=10) as response:
                         model_status = json.loads(response.read().decode("utf-8"))
+                    with urlopen(
+                        f"http://127.0.0.1:{api_server.server_port}/network/security", timeout=10
+                    ) as response:
+                        network_status = json.loads(response.read().decode("utf-8"))
+                    self.assertFalse(network_status["fake_ip_trust_enabled"])
+                    self.assertEqual(network_status["fake_ip_cidrs"], ["198.18.0.0/15"])
+                    self.assertTrue(network_status["allow_local_urls"])
+
+                    network_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/network/security",
+                        data=json.dumps(
+                            {
+                                "fake_ip_trust_enabled": True,
+                                "fake_ip_cidrs": "198.18.0.0/15\n198.51.100.0/24",
+                            }
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(network_request, timeout=10) as response:
+                        network_updated = json.loads(response.read().decode("utf-8"))
+                    self.assertTrue(network_updated["fake_ip_trust_enabled"])
+                    self.assertEqual(
+                        network_updated["fake_ip_cidrs"],
+                        ["198.18.0.0/15", "198.51.100.0/24"],
+                    )
+                    self.assertTrue(settings.fake_ip_trust_enabled)
+                    self.assertIn("EASYSOURCEFLOW_TRUST_FAKE_IP=true", config_file.read_text(encoding="utf-8"))
+                    self.assertIn(
+                        'EASYSOURCEFLOW_FAKE_IP_CIDRS="198.18.0.0/15,198.51.100.0/24"',
+                        config_file.read_text(encoding="utf-8"),
+                    )
+                    invalid_network_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/network/security",
+                        data=json.dumps(
+                            {
+                                "fake_ip_trust_enabled": True,
+                                "fake_ip_cidrs": "127.0.0.0/8",
+                            }
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as invalid_network_error:
+                        urlopen(invalid_network_request, timeout=10)
+                    self.assertEqual(invalid_network_error.exception.code, 400)
+                    invalid_network_payload = json.loads(
+                        invalid_network_error.exception.read().decode("utf-8")
+                    )
+                    self.assertEqual(
+                        invalid_network_payload["error"]["code"],
+                        "invalid_network_security_config",
+                    )
                     services = {service["id"]: service for service in model_status["model_services"]}
                     self.assertTrue(
                         {
@@ -344,6 +397,62 @@ class HttpAndMcpTests(unittest.TestCase):
                     )
                     self.assertFalse(services["ollama"]["requires_api_key"])
                     self.assertEqual(services["doubao"]["api_style"], "responses")
+
+                    draft_test_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/model/test",
+                        data=json.dumps(
+                            {
+                                "service_id": "minimax",
+                                "provider": "openai_compatible",
+                                "model": "MiniMax-M2.7",
+                                "strong_model": "MiniMax-M2.7",
+                                "model_base_url": "https://api.minimaxi.com/v1",
+                                "model_api_key": "draft-test-api-key",
+                            }
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with patch(
+                        "easysourceflow_core.http_api.run_health_checks",
+                        return_value={
+                            "ok": True,
+                            "checks": [
+                                {
+                                    "name": "deepseek_api",
+                                    "ok": True,
+                                    "required": True,
+                                    "message": "Model API is reachable.",
+                                }
+                            ],
+                        },
+                    ) as health_check:
+                        with urlopen(draft_test_request, timeout=10) as response:
+                            draft_test = json.loads(response.read().decode("utf-8"))
+                    tested_settings = health_check.call_args.args[0]
+                    self.assertTrue(draft_test["ok"])
+                    self.assertEqual(draft_test["tested"]["service_id"], "minimax")
+                    self.assertEqual(tested_settings.model, "MiniMax-M2.7")
+                    self.assertEqual(tested_settings.model_api_key, "draft-test-api-key")
+                    self.assertNotIn("draft-test-api-key", json.dumps(draft_test, ensure_ascii=False))
+
+                    mismatched_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/model/test",
+                        data=json.dumps(
+                            {
+                                "service_id": "minimax",
+                                "model": "deepseek-v4-flash",
+                                "strong_model": "deepseek-v4-pro",
+                            }
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as mismatch_error:
+                        urlopen(mismatched_request, timeout=10)
+                    self.assertEqual(mismatch_error.exception.code, 400)
+                    mismatch_payload = json.loads(mismatch_error.exception.read().decode("utf-8"))
+                    self.assertEqual(mismatch_payload["error"]["code"], "invalid_model_config")
 
                     model_payload = json.dumps(
                         {
@@ -373,6 +482,35 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertTrue(model["model"]["model_api_key_configured"])
                     self.assertTrue(model["model"]["deepseek_api_key_configured"])
                     self.assertNotIn("test-model-api-key", json.dumps(model, ensure_ascii=False))
+
+                    credential_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/model/credentials",
+                        data=json.dumps(
+                            {"service_id": "minimax", "model_api_key": "test-minimax-api-key"}
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(credential_request, timeout=10) as response:
+                        credential = json.loads(response.read().decode("utf-8"))
+                    self.assertTrue(credential["model"]["credential_status"]["minimax"])
+                    self.assertEqual(credential["model"]["active_service_id"], "deepseek")
+                    self.assertNotIn("test-minimax-api-key", json.dumps(credential, ensure_ascii=False))
+                    self.assertIn(
+                        "EASYSOURCEFLOW_MODEL_API_KEY_MINIMAX=test-minimax-api-key",
+                        config_file.read_text(encoding="utf-8"),
+                    )
+
+                    delete_credential_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/model/credentials/delete",
+                        data=json.dumps({"service_id": "minimax"}).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(delete_credential_request, timeout=10) as response:
+                        deleted_credential = json.loads(response.read().decode("utf-8"))
+                    self.assertFalse(deleted_credential["model"]["credential_status"]["minimax"])
+                    self.assertEqual(deleted_credential["model"]["active_service_id"], "deepseek")
 
                     switch_payload = json.dumps(
                         {

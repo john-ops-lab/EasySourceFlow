@@ -34,7 +34,7 @@ _BROWSER = None
 
 
 def extract_wechat_document(url: str, settings: Settings) -> SourceDocument:
-    canonical_url = normalize_url(url, settings.allow_local_urls)
+    canonical_url = normalize_url(url, settings.allow_local_urls, settings.trusted_fake_ip_cidrs)
     try:
         page_html = _fetch_wechat_html(canonical_url, settings.request_timeout_seconds)
         _raise_for_wechat_block_page(page_html)

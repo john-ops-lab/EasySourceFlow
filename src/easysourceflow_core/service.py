@@ -333,7 +333,11 @@ class EasySourceFlowService:
                 return
             logger.info("job started job_id=%s kind=link", job_id)
             self.store.mark_running(job_id, "extracting", 0.25)
-            canonical_url = normalize_url(url, self.settings.allow_local_urls)
+            canonical_url = normalize_url(
+                url,
+                self.settings.allow_local_urls,
+                self.settings.trusted_fake_ip_cidrs,
+            )
             source_type = detect_source_type(canonical_url)
             if source_type in {"bilibili", "youtube"}:
                 summary_quality = "pro"

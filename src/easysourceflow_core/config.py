@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .url_utils import DEFAULT_FAKE_IP_CIDRS, normalize_fake_ip_cidrs
+
 
 DEFAULT_SUMMARY_PROMPT = (
     "请根据来源内容生成中文 Markdown 总结。\n\n"
@@ -82,6 +84,8 @@ class Settings:
     summary_prompt_file: Path = Path()
     agent_workspace: str = ""
     project_root: Path = Path()
+    fake_ip_trust_enabled: bool = False
+    fake_ip_cidrs: str = ",".join(DEFAULT_FAKE_IP_CIDRS)
 
     @property
     def base_url(self) -> str:
@@ -94,6 +98,10 @@ class Settings:
     @property
     def model_base_url(self) -> str:
         return self.deepseek_base_url
+
+    @property
+    def trusted_fake_ip_cidrs(self) -> str:
+        return self.fake_ip_cidrs if self.fake_ip_trust_enabled else ""
 
 
 def default_bilibili_cookies_file(settings: Settings) -> Path:
@@ -180,6 +188,10 @@ def load_settings() -> Settings:
         summary_prompt_file=summary_prompt_file,
         agent_workspace=_env("EASYSOURCEFLOW_AGENT_WORKSPACE", ""),
         project_root=Path(_env("EASYSOURCEFLOW_PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))).expanduser(),
+        fake_ip_trust_enabled=_bool_env("EASYSOURCEFLOW_TRUST_FAKE_IP", False),
+        fake_ip_cidrs=",".join(
+            normalize_fake_ip_cidrs(_env("EASYSOURCEFLOW_FAKE_IP_CIDRS", ",".join(DEFAULT_FAKE_IP_CIDRS)))
+        ),
     )
 
 

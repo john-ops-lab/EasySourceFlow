@@ -7,29 +7,31 @@ import json
 import logging
 import re
 from typing import Optional, Tuple
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from easysourceflow_core.config import Settings
-from easysourceflow_core.errors import extraction_failed
+from easysourceflow_core.errors import EasySourceFlowError, extraction_failed
 from easysourceflow_core.models import SourceDocument
-from easysourceflow_core.url_utils import detect_source_type, normalize_url
+from easysourceflow_core.url_utils import detect_source_type, normalize_url, open_public_url
 
 
 logger = logging.getLogger(__name__)
 
 
 def extract_web_document(url: str, settings: Settings) -> SourceDocument:
-    canonical_url = normalize_url(url, settings.allow_local_urls)
+    canonical_url = normalize_url(url, settings.allow_local_urls, settings.trusted_fake_ip_cidrs)
     page_html = ""
     title = author = published_at = ""
     metadata = {}
     try:
-        page_html = _fetch_html(canonical_url, settings.request_timeout_seconds)
+        page_html = _fetch_html(canonical_url, settings)
         title, author, published_at, text, metadata = _extract_article_fields(page_html)
     except Exception as exc:
+        if isinstance(exc, EasySourceFlowError) and exc.code == "invalid_url":
+            raise
         primary_error = type(exc).__name__
         primary_message = str(exc)
-        fallback = _fetch_jina_reader_safe(canonical_url, settings.request_timeout_seconds, exc)
+        fallback = _fetch_jina_reader_safe(canonical_url, settings, exc)
         if not fallback:
             raise
         title, author, published_at, text, metadata = fallback
@@ -38,7 +40,7 @@ def extract_web_document(url: str, settings: Settings) -> SourceDocument:
             metadata["primary_fetch_message"] = primary_message
 
     if len(text) < 80:
-        fallback = _fetch_jina_reader_safe(canonical_url, settings.request_timeout_seconds, None)
+        fallback = _fetch_jina_reader_safe(canonical_url, settings, None)
         if fallback:
             title, author, published_at, text, metadata = fallback
         if len(text) < 80:
@@ -62,7 +64,7 @@ def extract_web_document(url: str, settings: Settings) -> SourceDocument:
     )
 
 
-def _fetch_html(url: str, timeout_seconds: float) -> str:
+def _fetch_html(url: str, settings: Settings) -> str:
     request = Request(
         url,
         headers={
@@ -75,7 +77,12 @@ def _fetch_html(url: str, timeout_seconds: float) -> str:
         },
     )
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with open_public_url(
+            request,
+            settings.request_timeout_seconds,
+            settings.allow_local_urls,
+            settings.trusted_fake_ip_cidrs,
+        ) as response:
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type and "application/xhtml" not in content_type:
                 raise extraction_failed(f"Unsupported content type: {content_type or 'unknown'}.")
@@ -209,7 +216,7 @@ def _article_body_from_json_ld(data: dict) -> str:
     return ""
 
 
-def _fetch_jina_reader(url: str, timeout_seconds: float) -> Optional[Tuple[str, Optional[str], Optional[str], str, dict]]:
+def _fetch_jina_reader(url: str, settings: Settings) -> Optional[Tuple[str, Optional[str], Optional[str], str, dict]]:
     if not url.startswith(("http://", "https://")):
         return None
     # The Jina Reader public API accepts the shorter form; keep a fallback for
@@ -221,7 +228,12 @@ def _fetch_jina_reader(url: str, timeout_seconds: float) -> Optional[Tuple[str, 
     for candidate in candidates:
         request = Request(candidate, headers={"User-Agent": "EasySourceFlow/0.1"})
         try:
-            with urlopen(request, timeout=min(max(timeout_seconds, 10), 30)) as response:
+            with open_public_url(
+                request,
+                min(max(settings.request_timeout_seconds, 10), 30),
+                settings.allow_local_urls,
+                settings.trusted_fake_ip_cidrs,
+            ) as response:
                 text = response.read().decode("utf-8", errors="replace").strip()
         except Exception:
             continue
@@ -244,11 +256,11 @@ def _fetch_jina_reader(url: str, timeout_seconds: float) -> Optional[Tuple[str, 
 
 def _fetch_jina_reader_safe(
     url: str,
-    timeout_seconds: float,
+    settings: Settings,
     primary_error: Optional[Exception],
 ) -> Optional[Tuple[str, Optional[str], Optional[str], str, dict]]:
     try:
-        return _fetch_jina_reader(url, timeout_seconds)
+        return _fetch_jina_reader(url, settings)
     except Exception as exc:
         logger.warning(
             "jina reader fallback failed url=%s primary_error=%s fallback_error=%s",

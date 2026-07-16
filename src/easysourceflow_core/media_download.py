@@ -39,7 +39,7 @@ def download_media(
     progress_callback: Optional[Callable[[str, float], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    canonical_url = normalize_url(url, settings.allow_local_urls)
+    canonical_url = normalize_url(url, settings.allow_local_urls, settings.trusted_fake_ip_cidrs)
     source_type = detect_source_type(canonical_url)
     if source_type not in {"bilibili", "youtube"}:
         raise invalid_url("音视频下载只支持 Bilibili 和 YouTube 链接。")

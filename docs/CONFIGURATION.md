@@ -20,10 +20,23 @@ Never commit `.env`, API keys, cookies, database files, logs, generated outputs,
 | `EASYSOURCEFLOW_DATABASE` | `$EASYSOURCEFLOW_DATA_DIR/easysourceflow.sqlite3` | SQLite database path. |
 | `EASYSOURCEFLOW_OUTPUT_DIR` | `$EASYSOURCEFLOW_DATA_DIR/output` | Markdown output and resource packages. |
 | `EASYSOURCEFLOW_ALLOW_LOCAL_URLS` | `false` | Allow localhost/private URL fetching. Keep disabled for normal use. |
+| `EASYSOURCEFLOW_TRUST_FAKE_IP` | `false` | Trust configured fake-IP ranges for domain resolution. Enable only when a local proxy owns those ranges. |
+| `EASYSOURCEFLOW_FAKE_IP_CIDRS` | `198.18.0.0/15` | Comma-separated non-global CIDRs trusted when fake-IP mode is enabled. |
 | `EASYSOURCEFLOW_REQUEST_TIMEOUT` | `20` | Network request timeout in seconds. |
 | `EASYSOURCEFLOW_MAX_CONTENT_CHARS` | `120000` | Maximum extracted content sent to the summarizer. |
 | `EASYSOURCEFLOW_CACHE_TTL_SECONDS` | `604800` | Successful-link cache lifetime. Set `0` to disable cache reads. |
 | `EASYSOURCEFLOW_PROJECT_ROOT` | package root | Project root used to locate local MCP tooling. The launchd installer sets it automatically. |
+
+## Fake-IP 代理环境
+
+Surge、Clash 和 Mihomo 等代理的 fake-ip 模式可能把公网域名解析到 `198.18.0.0/15`。严格模式会把这类非公网结果作为 SSRF 风险拒绝。可在 Web 的“维护 → 网络与安全”中开启 trusted 模式，也可以设置：
+
+```bash
+EASYSOURCEFLOW_TRUST_FAKE_IP=true
+EASYSOURCEFLOW_FAKE_IP_CIDRS=198.18.0.0/15
+```
+
+其他 fake-ip 网段必须明确添加。该模式只豁免“域名解析到可信网段”的情况；直接提交保留 IP、loopback、link-local 或 multicast 地址仍会被拒绝。`EASYSOURCEFLOW_ALLOW_LOCAL_URLS=true` 会跳过全部本地地址校验，风险更高，不应作为 fake-ip 的常规解决方案。
 
 ## Model Provider
 

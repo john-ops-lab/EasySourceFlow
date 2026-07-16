@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from dataclasses import replace
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,8 +31,10 @@ from .config import (
 )
 from .backup import backup_artifacts
 from .errors import EasySourceFlowError
+from .health import run_health_checks
 from .maintenance import maintenance_status
 from .service import EasySourceFlowService
+from .url_utils import DEFAULT_FAKE_IP_CIDRS, normalize_fake_ip_cidrs
 from .web_ui import delete_favorite, favorite_output, list_favorites, list_outputs, render_index, render_output
 
 
@@ -363,6 +366,9 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
             if parsed.path == "/prompt":
                 self._json(_prompt_status(settings))
                 return
+            if parsed.path == "/network/security":
+                self._json(_network_security_status(settings))
+                return
             if parsed.path == "/agent/status":
                 self._json(_agent_status(settings))
                 return
@@ -476,8 +482,11 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 "/favorites/delete",
                 "/outputs/open-package",
                 "/model",
+                "/model/credentials",
+                "/model/credentials/delete",
                 "/model/test",
                 "/prompt",
+                "/network/security",
                 "/bilibili/login/open",
                 "/cookies/bilibili/import",
                 "/cookies/bilibili/logout",
@@ -506,9 +515,27 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
                 return
+            if parsed.path in {"/model/credentials", "/model/credentials/delete"}:
+                try:
+                    self._json(
+                        _model_credential_update(
+                            settings,
+                            payload,
+                            delete=parsed.path.endswith("/delete"),
+                        )
+                    )
+                except EasySourceFlowError as exc:
+                    self._json({"error": exc.to_dict()}, status=400)
+                return
             if parsed.path == "/prompt":
                 try:
                     self._json(_prompt_update(settings, payload))
+                except EasySourceFlowError as exc:
+                    self._json({"error": exc.to_dict()}, status=400)
+                return
+            if parsed.path == "/network/security":
+                try:
+                    self._json(_network_security_update(settings, payload))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
                 return
@@ -531,7 +558,10 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                     self._json({"error": {"code": "favorite_delete_failed", "message": f"Could not delete favorite: {type(exc).__name__}."}}, status=500)
                 return
             if parsed.path == "/model/test":
-                self._json(_model_test(settings, service))
+                try:
+                    self._json(_model_test(settings, payload))
+                except EasySourceFlowError as exc:
+                    self._json({"error": exc.to_dict()}, status=400)
                 return
             if parsed.path == "/bilibili/login/open":
                 result = _open_bilibili_login()
@@ -797,6 +827,62 @@ def _prompt_update(settings: Settings, payload: dict) -> dict:
     return _prompt_status(settings)
 
 
+def _network_security_status(settings: Settings) -> dict:
+    return {
+        "ok": True,
+        "fake_ip_trust_enabled": settings.fake_ip_trust_enabled,
+        "fake_ip_cidrs": list(normalize_fake_ip_cidrs(settings.fake_ip_cidrs)),
+        "default_fake_ip_cidrs": list(DEFAULT_FAKE_IP_CIDRS),
+        "allow_local_urls": settings.allow_local_urls,
+        "mode": "trusted_fake_ip" if settings.fake_ip_trust_enabled else "strict",
+    }
+
+
+def _network_security_update(settings: Settings, payload: dict) -> dict:
+    enabled = payload.get("fake_ip_trust_enabled")
+    if not isinstance(enabled, bool):
+        raise EasySourceFlowError(
+            "invalid_network_security_config",
+            "Fake-IP trust must be enabled or disabled explicitly.",
+            ["Use the Web toggle or send a JSON boolean."],
+        )
+    raw_cidrs = payload.get("fake_ip_cidrs", settings.fake_ip_cidrs)
+    if not isinstance(raw_cidrs, (str, list, tuple)):
+        raise EasySourceFlowError(
+            "invalid_network_security_config",
+            "Fake-IP ranges must be a comma-separated string or a list.",
+            ["Enter one CIDR per line, such as 198.18.0.0/15."],
+        )
+    try:
+        cidrs = normalize_fake_ip_cidrs(raw_cidrs)
+    except ValueError as exc:
+        raise EasySourceFlowError(
+            "invalid_network_security_config",
+            str(exc),
+            ["Use non-global CIDR ranges and do not include loopback, link-local, or multicast networks."],
+        ) from exc
+    if enabled and not cidrs:
+        raise EasySourceFlowError(
+            "invalid_network_security_config",
+            "At least one fake-IP CIDR is required when trusted mode is enabled.",
+            ["Use 198.18.0.0/15 for common Surge and Clash fake-IP configurations."],
+        )
+    cidr_text = ",".join(cidrs)
+    config_file = _write_env_values(
+        _config_file_path(),
+        {
+            "EASYSOURCEFLOW_TRUST_FAKE_IP": "true" if enabled else "false",
+            "EASYSOURCEFLOW_FAKE_IP_CIDRS": cidr_text,
+        },
+    )
+    object.__setattr__(settings, "fake_ip_trust_enabled", enabled)
+    object.__setattr__(settings, "fake_ip_cidrs", cidr_text)
+    logger.info("network security configuration updated fake_ip_trust=%s cidr_count=%s", enabled, len(cidrs))
+    result = _network_security_status(settings)
+    result["config_file"] = str(config_file)
+    return result
+
+
 def _summary_prompt_path(settings: Settings) -> Path:
     configured = settings.summary_prompt_file
     if str(configured) not in {"", "."}:
@@ -950,10 +1036,46 @@ def _model_status(settings: Settings) -> dict:
     }
 
 
-def _model_test(settings: Settings, service: EasySourceFlowService) -> dict:
-    health = service.health()
+def _model_test(settings: Settings, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    requested_service_id = str(payload.get("service_id") or "").strip().lower()
+    selected_service = _model_service_by_id(requested_service_id) if requested_service_id else _model_service_for_settings(settings)
+    if selected_service is None:
+        raise EasySourceFlowError(
+            "invalid_model_config",
+            "Unsupported model service.",
+            ["Choose one of the model services returned by GET /model."],
+        )
+    configured_values = _read_env_values(_config_file_path())
+    key_name = _MODEL_SERVICE_KEY_NAMES.get(selected_service["id"])
+    api_key = str(payload.get("model_api_key") or "").strip()
+    if not api_key and key_name:
+        api_key = configured_values.get(key_name, "")
+    if not api_key and selected_service["id"] == _model_service_for_settings(settings)["id"]:
+        api_key = settings.model_api_key
+    model = str(payload.get("model") or selected_service["default_model"])
+    strong_model = str(payload.get("strong_model") or selected_service["strong_model"])
+    _validate_service_models(selected_service, model, strong_model)
+    candidate = replace(
+        settings,
+        model_provider=str(payload.get("provider") or selected_service["provider"]),
+        model=model,
+        strong_model=strong_model,
+        deepseek_base_url=str(payload.get("model_base_url") or selected_service["base_url"]),
+        deepseek_api_key=api_key,
+    )
+    health = run_health_checks(candidate)
     deepseek = next((item for item in health.get("checks", []) if item.get("name") == "deepseek_api"), None)
-    return {"ok": bool(deepseek and deepseek.get("ok")), "check": deepseek, "model": _model_status(settings)}
+    return {
+        "ok": bool(deepseek and deepseek.get("ok")),
+        "check": deepseek,
+        "tested": {
+            "service_id": selected_service["id"],
+            "model": candidate.model,
+            "strong_model": candidate.strong_model,
+        },
+        "model": _model_status(settings),
+    }
 
 
 def _document_parser_status() -> dict:
@@ -993,6 +1115,8 @@ def _model_update(settings: Settings, payload: dict) -> dict:
         raise EasySourceFlowError("invalid_model_config", "Model name cannot be empty.", ["Choose or type a model name."])
     if not strong_model:
         raise EasySourceFlowError("invalid_model_config", "Strong model name cannot be empty.", ["Choose or type a strong model name."])
+    if service is not None:
+        _validate_service_models(service, model, strong_model)
     if provider != "local" and not model_base_url.startswith(("http://", "https://")):
         raise EasySourceFlowError("invalid_model_config", "Model base URL must start with http:// or https://.", ["Use an official API base URL or a compatible endpoint."])
 
@@ -1033,8 +1157,65 @@ def _model_update(settings: Settings, payload: dict) -> dict:
     return {"ok": True, "config_file": str(config_file), "model": _model_status(settings)}
 
 
+def _model_credential_update(settings: Settings, payload: dict, delete: bool = False) -> dict:
+    service_id = str(payload.get("service_id") or "").strip().lower()
+    service = _model_service_by_id(service_id)
+    if service is None or service_id == "local":
+        raise EasySourceFlowError(
+            "invalid_model_credential",
+            "Choose a model service that supports API credentials.",
+            ["Choose one of the external model services returned by GET /model."],
+        )
+    api_key = str(payload.get("model_api_key") or "").strip()
+    if not delete and not api_key:
+        raise EasySourceFlowError(
+            "invalid_model_credential",
+            "API Key cannot be empty.",
+            ["Enter the API Key issued by the selected model service."],
+        )
+
+    key_name = _MODEL_SERVICE_KEY_NAMES[service_id]
+    value = "" if delete else api_key
+    values = {key_name: value}
+    active_service_id = _model_service_for_settings(settings)["id"]
+    if service_id == active_service_id:
+        values.update(
+            {
+                "EASYSOURCEFLOW_MODEL_API_KEY": value,
+                "DEEPSEEK_API_KEY": value,
+            }
+        )
+        object.__setattr__(settings, "deepseek_api_key", value)
+    config_file = _write_env_values(_config_file_path(), values)
+    logger.info(
+        "model credential %s service=%s config_file=%s",
+        "deleted" if delete else "updated",
+        service_id,
+        config_file,
+    )
+    return {"ok": True, "config_file": str(config_file), "model": _model_status(settings)}
+
+
 def _model_service_by_id(service_id: str) -> dict | None:
     return next((service for service in _MODEL_SERVICES if service["id"] == service_id), None)
+
+
+def _validate_service_models(service: dict, model: str, strong_model: str) -> None:
+    for name in (model, strong_model):
+        owner = next(
+            (
+                candidate
+                for candidate in _MODEL_SERVICES
+                if candidate["id"] != service["id"] and name in candidate["models"]
+            ),
+            None,
+        )
+        if owner is not None:
+            raise EasySourceFlowError(
+                "invalid_model_config",
+                f"Model {name} belongs to {owner['label']}, not {service['label']}.",
+                [f"Choose a {service['label']} model or enter a custom model ID for that service."],
+            )
 
 
 def _model_service_for_config(provider: str, base_url: str) -> dict:

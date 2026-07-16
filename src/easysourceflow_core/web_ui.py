@@ -854,7 +854,23 @@ INDEX_HTML = """<!doctype html>
       border-top: 1px solid var(--line);
     }
     .service-state, .sidebar-model { grid-column: 1; font-size: 12px; color: var(--muted); }
-    .service-state { display: flex; gap: 7px; align-items: center; color: var(--ink); }
+    .service-state {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      width: fit-content;
+      min-height: 32px;
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      text-align: left;
+    }
+    .service-state:hover { background: #f7f7f7; }
+    .service-state.ready { border-color: #9ad4b0; background: #f0faf4; color: #166534; }
+    .service-state.warning { border-color: #f3c26b; background: #fff8e8; color: #8a5200; }
+    .service-state.blocked { border-color: #f0a3a3; background: #fff1f1; color: #9f1d1d; }
     .service-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); }
     .service-dot.ok { background: var(--green); }
     .service-dot.bad { background: var(--red); }
@@ -992,8 +1008,6 @@ INDEX_HTML = """<!doctype html>
     #download-submit-button { min-width: 126px; min-height: 46px; background: var(--pink); border-color: var(--pink); }
     .download-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
     .download-progress { width: 100%; height: 5px; margin-top: 10px; accent-color: var(--pink); }
-    #config-save-button { background: var(--pink); border-color: var(--pink); }
-    #config-save-button:hover { background: #cc0000; border-color: #cc0000; }
     button { border-radius: 6px; background: var(--ink); border-color: var(--ink); }
     button:hover { transform: none; box-shadow: none; background: #272727; }
     button.secondary { background: #fff; border-color: #d3d3d3; }
@@ -1088,6 +1102,18 @@ INDEX_HTML = """<!doctype html>
     .settings-section h2, .settings-section h3, .settings-heading h3, .settings-action-row h3 { margin: 0; font-size: 17px; }
     .settings-section p, .settings-heading p, .settings-action-row p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
     .prompt-editor { width: 100%; min-height: 220px; margin-top: 18px; resize: vertical; line-height: 1.7; }
+    .security-toggle { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px; cursor: pointer; }
+    .security-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .security-toggle-track { position: relative; flex: 0 0 42px; width: 42px; height: 24px; border-radius: 12px; background: #c7c7c7; transition: background .16s ease; }
+    .security-toggle-track::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.18); transition: transform .16s ease; }
+    .security-toggle input:checked + .security-toggle-track { background: var(--pink); }
+    .security-toggle input:checked + .security-toggle-track::after { transform: translateX(18px); }
+    .security-toggle input:focus-visible + .security-toggle-track { outline: 3px solid rgba(255,0,51,.18); outline-offset: 2px; }
+    .security-toggle-copy { display: grid; gap: 2px; }
+    .security-toggle-copy span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .cidr-editor { width: 100%; min-height: 118px; margin-top: 8px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.6; }
+    .security-notice { margin: 12px 0 18px; padding: 12px 14px; border-left: 3px solid #e6a23c; background: #fff8e8; color: #724700; font-size: 13px; line-height: 1.6; }
+    .security-notice.danger { border-left-color: #d93025; background: #fff1f0; color: #8f1d17; }
     .editor-meta { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; color: var(--muted); font-size: 12px; }
     .fixed-rule-list { margin: 12px 0 0; padding-left: 20px; color: #3f3f3f; font-size: 13px; line-height: 1.8; }
     .agent-status-list { margin-top: 8px; }
@@ -1098,15 +1124,41 @@ INDEX_HTML = """<!doctype html>
     .code-block { position: relative; margin-top: 14px; padding: 16px 48px 16px 16px; border: 1px solid var(--line); border-radius: 6px; background: #fafafa; color: #202124; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .copy-code { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; padding: 0; }
     #settings-panel, #model-choice-panel, #system-panel { padding: 0; }
-    #settings-panel > .section-title, #model-choice-panel > .section-title, #system-panel > .section-title { margin-bottom: 18px; }
+    #settings-panel > .section-title, #system-panel > .section-title { margin-bottom: 18px; }
     .settings-grid { grid-template-columns: 1fr; gap: 0; }
     .settings-grid > .row { padding: 20px 0; }
     .control-row { grid-template-columns: 140px minmax(0, 1fr); max-width: 760px; }
-    #model-choice-panel .settings-grid > .row:first-child { background: #fafafa; border: 1px solid var(--line); border-radius: 7px; padding: 18px; margin-bottom: 16px; }
-    #model-choice-panel .settings-grid > .row:last-child { padding-top: 18px; }
-    .model-provider-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; margin: 14px 0 18px; }
-    .model-provider-button { min-height: 42px; background: #fff; color: var(--ink); border-color: var(--line); }
-    .model-provider-button.active { color: var(--pink); border-color: var(--pink); background: var(--pink-soft); }
+    #model-choice-panel { max-width: 760px; }
+    .model-page-heading { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+    .model-page-heading h2 { margin: 0; font-size: 24px; }
+    .model-page-heading p { max-width: 560px; margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .model-configurator { display: grid; gap: 16px; padding: 30px 0 32px; border-bottom: 1px solid var(--line); }
+    .model-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .model-field { display: grid; gap: 7px; }
+    .model-field label { color: #3f3f3f; font-size: 13px; font-weight: 650; }
+    .model-field input, .model-field select { min-height: 52px; border-color: #dedede; border-radius: 8px; background: #fff; font-size: 15px; }
+    .model-field input:focus, .model-field select:focus { border-color: #9f9f9f; box-shadow: 0 0 0 3px rgba(0,0,0,.05); }
+    .model-service-note { display: grid; gap: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .model-service-note strong { color: var(--ink); font-size: 13px; }
+    .model-primary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .model-primary-actions button { min-height: 48px; }
+    .configured-models { padding-top: 30px; }
+    .configured-models-heading { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 14px; }
+    .configured-models-heading h3 { margin: 0; font-size: 17px; }
+    .configured-models-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .configured-models-heading > span { color: var(--muted); font-size: 12px; }
+    .credential-list { display: grid; gap: 8px; margin: 0; }
+    .credential-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 0 12px 0 0; border: 0; border-radius: 6px; background: #f7f7f7; }
+    .credential-select { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 72px; padding: 12px 14px; border: 0; background: transparent; color: var(--ink); text-align: left; }
+    .credential-select:hover { background: #f1f1f1; }
+    .credential-chevron { color: #8a8a8a; font-size: 12px; }
+    .credential-title-line { display: flex; gap: 8px; align-items: center; min-width: 0; }
+    .credential-title-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .credential-current { display: inline-flex; gap: 5px; align-items: center; color: #16834b; font-size: 12px; white-space: nowrap; }
+    .credential-current::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #20b96b; }
+    .credential-item .meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .credential-delete { width: 34px; height: 34px; padding: 0; border: 0; background: transparent; color: var(--muted); }
+    .credential-delete:hover { background: #fff0f0; color: var(--red); }
     .unsaved-notice { display: none; margin: 14px 0 0; color: var(--gold); font-size: 12px; }
     .unsaved-notice.visible { display: block; }
     .health-grid { gap: 0; }
@@ -1142,6 +1194,7 @@ INDEX_HTML = """<!doctype html>
       .maintenance-tab.active { border-left: 0; border-bottom-color: var(--pink); }
     }
     @media (max-width: 700px) {
+      html { scroll-padding-bottom: 88px; }
       body { padding-bottom: 72px; }
       .app-shell { display: block; padding: 0; }
       .sidebar {
@@ -1203,7 +1256,14 @@ INDEX_HTML = """<!doctype html>
       .agent-status-row { grid-template-columns: 1fr auto; gap: 6px 12px; }
       .agent-status-row .meta { grid-column: 1 / -1; }
       .settings-heading, .settings-action-row { align-items: flex-start; }
-      .model-provider-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .model-page-heading { display: block; padding-bottom: 18px; }
+      .model-page-heading > .status { margin-top: 12px; }
+      .model-configurator { padding-top: 22px; }
+      .model-pair { grid-template-columns: 1fr; }
+      .model-primary-actions { grid-template-columns: 1fr; }
+      .model-primary-actions button { scroll-margin-bottom: 88px; }
+      .credential-item { grid-template-columns: minmax(0, 1fr) 38px; }
+      .credential-title-line { align-items: flex-start; flex-direction: column; gap: 3px; }
       .row-head { align-items: flex-start; }
       .toast-region { left: 12px; right: 12px; bottom: 90px; }
       .toast { min-width: 0; max-width: none; width: 100%; }
@@ -1226,7 +1286,7 @@ INDEX_HTML = """<!doctype html>
         <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="maintenance-panel" data-tab="maintenance-panel"><span class="nav-icon" aria-hidden="true">⚙</span><span>维护</span></button>
       </div>
       <div class="sidebar-actions">
-        <div class="service-state"><span class="service-dot" id="service-dot"></span><span id="service-label">服务状态检查中</span></div>
+        <button class="service-state" id="readiness-button" type="button" title="查看需要处理的配置"><span class="service-dot" id="service-dot"></span><span id="service-label">就绪状态检查中</span></button>
         <div class="sidebar-model">当前模型 <strong id="sidebar-model">-</strong></div>
         <div class="sidebar-time" id="clock"></div>
         <button class="icon-button secondary" id="refresh-button" type="button" title="刷新数据" aria-label="刷新数据">↻</button>
@@ -1459,30 +1519,6 @@ INDEX_HTML = """<!doctype html>
             <div class="status-line" id="youtube-action-status" role="status" aria-live="polite"></div>
           </div>
 
-          <div class="row">
-            <div class="row-head">
-              <span class="title">模型服务商</span>
-              <span class="status" id="model-service-pill">checking</span>
-            </div>
-            <div class="control-row">
-              <label for="model-service">服务商</label>
-              <select id="model-service"></select>
-            </div>
-            <div class="control-row">
-              <label for="config-api-key">API Key</label>
-              <input id="config-api-key" type="password" autocomplete="new-password" placeholder="输入后保存；留空不修改">
-            </div>
-            <div class="control-row">
-              <label for="config-clear-key">清除 Key</label>
-              <input id="config-clear-key" type="checkbox" aria-label="清除模型 API Key">
-            </div>
-            <p class="hint" id="model-service-help">选择服务商后会自动使用对应接口地址。</p>
-            <p class="hint" id="model-key-status">API Key 状态读取中</p>
-            <div class="actions">
-              <button id="config-save-button" type="button">保存配置</button>
-            </div>
-            <div class="status-line" id="config-status"></div>
-          </div>
         </div>
         <div class="section-title" style="margin-top: 16px;">
           <h2>运行状态</h2>
@@ -1493,40 +1529,46 @@ INDEX_HTML = """<!doctype html>
       </section>
 
       <section id="model-choice-panel" class="workspace-page">
-        <div class="section-title">
-          <h2>模型选择</h2>
-          <span class="pill" id="current-model-pill">checking</span>
-        </div>
-        <div class="settings-grid">
-          <div class="row">
-            <div class="row-head">
-              <span class="title">当前模型</span>
-              <span class="status" id="current-provider-pill">-</span>
-            </div>
-            <div class="meta" id="current-model-summary">读取状态中</div>
-            <div class="meta" id="current-model-endpoint"></div>
+        <header class="model-page-heading">
+          <div><h2>AI 模型</h2><p>选择服务商和模型，完成验证后设为 EasySourceFlow 的当前模型。</p></div>
+          <span class="status" id="current-provider-pill">读取中</span>
+        </header>
+        <div class="model-configurator">
+          <div class="model-field">
+            <label for="model-service">模型服务商</label>
+            <select id="model-service"></select>
           </div>
-          <div class="row">
-            <div class="row-head">
-              <span class="title">选择模型</span>
-              <span class="status">保存后生效</span>
-            </div>
-            <div class="control-row">
-              <label for="model-name">默认模型</label>
+          <div class="model-pair">
+            <div class="model-field">
+              <label for="model-name">Fast 模型</label>
               <input id="model-name" list="model-name-options" autocomplete="off" placeholder="选择或输入模型 ID">
               <datalist id="model-name-options"></datalist>
             </div>
-            <div class="control-row">
+            <div class="model-field">
               <label for="strong-model-name">Pro 模型</label>
               <input id="strong-model-name" list="strong-model-name-options" autocomplete="off" placeholder="选择或输入 Pro 模型 ID">
               <datalist id="strong-model-name-options"></datalist>
             </div>
-            <div class="actions">
-              <button id="model-save-button" type="button">保存选择</button>
-              <button class="secondary" id="settings-model-test-button" type="button">测试当前模型</button>
-            </div>
-            <div class="status-line" id="settings-model-status"></div>
           </div>
+          <div class="model-field" id="model-key-field">
+            <label for="config-api-key">API Key</label>
+            <input id="config-api-key" type="password" autocomplete="new-password" placeholder="请输入 API Key；已保存时可以留空">
+          </div>
+          <div class="model-primary-actions">
+            <button class="secondary" id="settings-model-test-button" type="button">测试连接</button>
+            <button id="model-save-button" type="button">设为当前模型</button>
+          </div>
+          <div class="model-service-note">
+            <strong id="model-service-pill">checking</strong>
+            <span id="model-service-help">选择服务商后会自动使用对应接口地址。</span>
+            <span id="model-key-status">API Key 状态读取中</span>
+          </div>
+          <div class="unsaved-notice" id="model-unsaved-notice">当前选择尚未应用。</div>
+          <div class="status-line" id="settings-model-status" role="status" aria-live="polite"></div>
+        </div>
+        <div class="configured-models">
+          <div class="configured-models-heading"><div><h3>已配置模型</h3><p>选择已有配置后，可直接设为当前模型。</p></div><span id="configured-model-count">0</span></div>
+          <div class="credential-list" id="model-credential-list"></div>
         </div>
       </section>
 
@@ -1538,6 +1580,7 @@ INDEX_HTML = """<!doctype html>
             <button class="maintenance-tab" type="button" data-maintenance-tab="model-maintenance">模型</button>
             <button class="maintenance-tab" type="button" data-maintenance-tab="prompt-maintenance">总结提示词</button>
             <button class="maintenance-tab" type="button" data-maintenance-tab="agent-maintenance">Agent 接入</button>
+            <button class="maintenance-tab" type="button" data-maintenance-tab="network-maintenance">网络与安全</button>
             <button class="maintenance-tab" type="button" data-maintenance-tab="system-maintenance">系统状态</button>
             <button class="maintenance-tab" type="button" data-maintenance-tab="storage-maintenance">存储与备份</button>
           </nav>
@@ -1587,6 +1630,37 @@ INDEX_HTML = """<!doctype html>
                 <p>让 Agent 调用 EasySourceFlow 的健康检查或提交一个链接。本页会记录最近一次真实 MCP 调用，自动刷新后显示为“最近已连接”。</p>
               </div>
             </div>
+            <div id="network-maintenance" class="maintenance-view">
+              <div class="settings-section">
+                <div class="settings-heading">
+                  <div><h3>Fake-IP 代理兼容</h3><p>严格模式会拒绝所有非公网解析结果。仅在确认本机代理使用 fake-ip 时启用信任。</p></div>
+                  <span class="status" id="network-security-pill">读取中</span>
+                </div>
+                <label class="security-toggle" for="fake-ip-trust-enabled">
+                  <input id="fake-ip-trust-enabled" type="checkbox">
+                  <span class="security-toggle-track" aria-hidden="true"></span>
+                  <span class="security-toggle-copy"><strong>信任下列 Fake-IP 网段</strong><span>只适用于域名解析；直接输入保留 IP 仍会被拒绝。</span></span>
+                </label>
+                <div class="security-notice">开启后，EasySourceFlow 会把下列非公网地址视为由本机代理接管。不要填写真实内网、loopback、link-local 或 multicast 网段。</div>
+                <label for="fake-ip-cidrs"><strong>可信网段</strong></label>
+                <textarea id="fake-ip-cidrs" class="cidr-editor" spellcheck="false" placeholder="每行一个 CIDR，例如 198.18.0.0/15"></textarea>
+                <p class="meta">默认仅预制 <code>198.18.0.0/15</code>。其他网段必须由你明确填写，最多 32 个。</p>
+                <div class="actions">
+                  <button id="network-security-save" type="button">保存网络设置</button>
+                  <button class="secondary" id="network-security-reset" type="button">恢复默认网段</button>
+                </div>
+                <div class="status-line" id="network-security-status" role="status" aria-live="polite"></div>
+              </div>
+              <div class="settings-section">
+                <h3>当前安全边界</h3>
+                <div id="network-local-warning" class="security-notice danger" hidden></div>
+                <ul class="fixed-rule-list">
+                  <li>localhost、直接输入的保留 IP、loopback、link-local 和 multicast 默认拒绝。</li>
+                  <li>trusted 模式只豁免域名解析到明确配置的 fake-ip 网段。</li>
+                  <li>普通网页发生重定向时，每个新目标都会重新校验。</li>
+                </ul>
+              </div>
+            </div>
             <div id="system-maintenance" class="maintenance-view"></div>
             <div id="storage-maintenance" class="maintenance-view">
               <div class="settings-section" id="maintenance-status-card">
@@ -1611,7 +1685,7 @@ INDEX_HTML = """<!doctype html>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <script>
-    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, promptDirty: false, prompt: null, agent: null, model: null, modelServices: [], initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
+    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, credentialDirty: false, promptDirty: false, networkSecurityDirty: false, prompt: null, agent: null, networkSecurity: null, model: null, modelServices: [], health: null, runtimeStatus: null, readinessTarget: 'system-maintenance', initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1672,7 +1746,6 @@ INDEX_HTML = """<!doctype html>
       const system = $('system-maintenance');
       const bilibiliRow = $('bilibili-import-button')?.closest('.row');
       const youtubeRow = $('youtube-import-button')?.closest('.row');
-      const modelProviderRow = $('model-service')?.closest('.row');
       [bilibiliRow, youtubeRow].forEach((row) => {
         if (!row) return;
         row.classList.add('settings-section');
@@ -1682,23 +1755,6 @@ INDEX_HTML = """<!doctype html>
       modelChoice.classList.remove('workspace-page');
       modelChoice.classList.add('embedded-panel');
       model.appendChild(modelChoice);
-      if (modelProviderRow) {
-        modelProviderRow.classList.add('settings-section');
-        model.appendChild(modelProviderRow);
-      }
-      const serviceRow = $('model-service').closest('.control-row');
-      if (serviceRow) serviceRow.classList.add('sr-only');
-      const providerList = document.createElement('div');
-      providerList.id = 'model-provider-list';
-      providerList.className = 'model-provider-list';
-      modelProviderRow?.insertBefore(providerList, modelProviderRow.querySelector('.control-row'));
-      const unsaved = document.createElement('div');
-      unsaved.id = 'model-unsaved-notice';
-      unsaved.className = 'unsaved-notice';
-      unsaved.textContent = '有尚未保存的更改。自动刷新不会覆盖这些内容。';
-      modelProviderRow?.appendChild(unsaved);
-      $('config-save-button').textContent = '保存并测试';
-      $('model-save-button').hidden = true;
 
       const healthPanel = $('system-panel');
       healthPanel.classList.remove('workspace-page');
@@ -1716,12 +1772,18 @@ INDEX_HTML = """<!doctype html>
 
     function activateMaintenanceTab(viewId, updateRoute = true) {
       const target = $(viewId) ? viewId : 'account-maintenance';
+      let activeButton = null;
       document.querySelectorAll('.maintenance-tab').forEach((button) => {
-        button.classList.toggle('active', button.dataset.maintenanceTab === target);
+        const active = button.dataset.maintenanceTab === target;
+        button.classList.toggle('active', active);
+        if (active) activeButton = button;
       });
       document.querySelectorAll('.maintenance-view').forEach((view) => {
         view.classList.toggle('active', view.id === target);
       });
+      if (activeButton) {
+        requestAnimationFrame(() => activeButton.scrollIntoView({ block: 'nearest', inline: 'center' }));
+      }
       if (updateRoute) {
         const name = target.replace('-maintenance', '');
         history.pushState(null, '', `#maintenance/${name}`);
@@ -2042,9 +2104,8 @@ INDEX_HTML = """<!doctype html>
       const data = await getJson('/health');
       const runtime = data.runtime || {};
       const checks = runtime.checks || [];
+      state.health = runtime;
       $('health-pill').textContent = `${runtime.ok ? '正常' : '需处理'} · v${data.version || '-'}`;
-      $('service-dot').className = `service-dot ${runtime.ok ? 'ok' : 'bad'}`;
-      $('service-label').textContent = runtime.ok ? '服务正常' : '服务需处理';
       $('health').innerHTML = checks.map((check) => `
         <div class="check ${check.ok ? 'ok' : 'bad'}">
           <strong>${esc(check.name)}</strong>
@@ -2052,6 +2113,62 @@ INDEX_HTML = """<!doctype html>
           ${check.fix ? `<span>处理：${esc(check.fix)}</span>` : ''}
         </div>
       `).join('') || '<div class="empty">暂无检查项目</div>';
+      renderReadiness();
+    }
+
+    function renderReadiness() {
+      const button = $('readiness-button');
+      const checks = state.health?.checks || [];
+      const requiredFailure = checks.find((check) => check.required && !check.ok);
+      const runtime = state.runtimeStatus;
+      const activeService = state.model ? currentModelService(state.model) : null;
+      const keyMissing = Boolean(
+        activeService
+        && activeService.provider !== 'local'
+        && activeService.requires_api_key !== false
+        && !state.model?.credential_status?.[activeService.id]
+      );
+      let level = 'ready';
+      let label = '已就绪';
+      let target = 'system-maintenance';
+      if (keyMissing || requiredFailure?.name === 'deepseek_api') {
+        level = 'blocked';
+        label = keyMissing ? '模型 API Key 待配置' : '模型连接需处理';
+        target = 'model-maintenance';
+      } else if (requiredFailure) {
+        level = 'blocked';
+        label = `${requiredFailure.name} 需处理`;
+        target = 'system-maintenance';
+      } else if (state.agent && !state.agent.mcp?.available) {
+        level = 'blocked';
+        label = 'Agent 组件未就绪';
+        target = 'agent-maintenance';
+      } else if (state.agent?.skill?.configured && !state.agent.skill?.installed) {
+        level = 'warning';
+        label = 'Agent Skill 待安装';
+        target = 'agent-maintenance';
+      } else if (state.networkSecurity?.allow_local_urls) {
+        level = 'warning';
+        label = '本地 URL 防护已关闭';
+        target = 'network-maintenance';
+      } else if (runtime && (!runtime.bilibili?.ok || !runtime.youtube?.ok)) {
+        level = 'warning';
+        label = !runtime.bilibili?.ok && !runtime.youtube?.ok ? '账号登录待完成' : `${!runtime.bilibili?.ok ? 'B站' : 'YouTube'} 登录待完成`;
+        target = 'account-maintenance';
+      } else if (!state.health || !runtime || !state.agent) {
+        level = 'warning';
+        label = '就绪状态检查中';
+      }
+      state.readinessTarget = target;
+      button.className = `service-state ${level}`;
+      button.title = level === 'ready' ? '所有必要配置均已就绪' : '点击前往处理';
+      $('service-dot').className = `service-dot ${level === 'ready' ? 'ok' : level === 'blocked' ? 'bad' : ''}`;
+      $('service-label').textContent = label;
+    }
+
+    function openReadinessTarget() {
+      activateTab('maintenance-panel');
+      activateMaintenanceTab(state.readinessTarget || 'system-maintenance');
     }
 
     async function loadOutputs() {
@@ -2112,7 +2229,7 @@ INDEX_HTML = """<!doctype html>
           return `
         <div class="row result-row">
           <div class="row-head">
-            <a class="title" href="${esc(item.view_url)}">${esc(item.title)}</a>
+            <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${esc(item.title)}</a>
             <span class="status">${esc(item.source_type)}</span>
           </div>
           <div class="meta">${esc(item.date)} · 更新于 ${esc(item.updated_at)} · ${Math.ceil(item.size / 1024)} KB</div>
@@ -2136,7 +2253,7 @@ INDEX_HTML = """<!doctype html>
       $('favorites').innerHTML = items.map((item) => `
         <div class="row">
           <div class="row-head">
-            <a class="title" href="${esc(item.view_url)}">${esc(item.title)}</a>
+            <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${esc(item.title)}</a>
             <span class="status">${esc(item.source_type)}</span>
           </div>
           <div class="meta">${esc(item.date)} · 更新于 ${esc(item.updated_at)} · ${Math.ceil(item.size / 1024)} KB</div>
@@ -2186,7 +2303,7 @@ INDEX_HTML = """<!doctype html>
     function outputLink(path) {
       const item = state.outputsByPath.get(path);
       if (!item) return '';
-      return `<a href="${esc(item.view_url)}" target="_blank" rel="noreferrer">打开结果</a>`;
+      return `<a class="link-button" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">查看结果</a>`;
     }
 
     async function loadJobs() {
@@ -2196,6 +2313,11 @@ INDEX_HTML = """<!doctype html>
       $('queue-status').textContent = `队列：等待 ${counts.queued || 0} · 运行 ${counts.running || 0} · 已取消 ${counts.canceled || 0}`;
       const items = data.items || [];
       state.jobs = items;
+      const outputMissing = items.some((job) => {
+        const path = job.result?.output_markdown_path;
+        return job.status === 'succeeded' && path && !state.outputsByPath.has(path);
+      });
+      if (state.initialized && outputMissing) await loadOutputs();
       $('job-count').textContent = String(items.length);
       $('queue-pill').textContent = queue.active_limited ? 'limited' : 'live';
       renderJobs();
@@ -2219,10 +2341,14 @@ INDEX_HTML = """<!doctype html>
         const transcript = transcriptMeta(result);
         const cancel = ['queued', 'running'].includes(job.status) ? `<button class="link-button" type="button" onclick="cancelJob('${esc(job.job_id)}')">取消</button>` : '';
         const quality = (job.summary_quality || result.summary_quality || 'fast').toLowerCase() === 'pro' ? 'Pro' : 'Fast';
+        const outputItem = result.output_markdown_path ? state.outputsByPath.get(result.output_markdown_path) : null;
+        const title = outputItem
+          ? `<a class="title" href="${esc(outputItem.view_url)}" target="_blank" rel="noreferrer">${esc(job.title || job.url)}</a>`
+          : `<button class="link-button title" type="button" onclick="showJob('${esc(job.job_id)}')">${esc(job.title || job.url)}</button>`;
         return `
           <div class="row">
             <div class="row-head">
-              <button class="link-button title" type="button" onclick="showJob('${esc(job.job_id)}')">${esc(job.title || job.url)}</button>
+              ${title}
               <span class="status ${esc(job.status)}">${esc(statusLabel(job.status))}</span>
             </div>
             <div class="meta">${esc(jobSourceLabel(job))} · ${quality} · ${esc(formatJobTime(job.updated_at || job.created_at))}${job.status === 'running' ? ` · ${Math.round((job.progress || 0) * 100)}%` : ''}</div>
@@ -2258,6 +2384,7 @@ INDEX_HTML = """<!doctype html>
       if (remember) state.activeJob = jobId;
       const job = await getJson(`/jobs/${encodeURIComponent(jobId)}`);
       const result = job.result || {};
+      if (result.output_markdown_path && !state.outputsByPath.has(result.output_markdown_path)) await loadOutputs();
       $('detail-pill').textContent = job.status;
       $('job-detail').className = 'detail';
       const steps = (job.error_next_steps || []).map((step) => `<li>${esc(step)}</li>`).join('');
@@ -2462,6 +2589,56 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function loadNetworkSecurity() {
+      const security = await getJson('/network/security');
+      state.networkSecurity = security;
+      if (!state.networkSecurityDirty) {
+        $('fake-ip-trust-enabled').checked = Boolean(security.fake_ip_trust_enabled);
+        $('fake-ip-cidrs').value = (security.fake_ip_cidrs || []).join('\\n');
+      }
+      $('network-security-pill').textContent = security.fake_ip_trust_enabled ? '已信任代理' : '严格模式';
+      $('network-security-pill').className = `status ${security.fake_ip_trust_enabled ? 'queued' : 'succeeded'}`;
+      $('network-local-warning').hidden = !security.allow_local_urls;
+      $('network-local-warning').textContent = security.allow_local_urls
+        ? 'EASYSOURCEFLOW_ALLOW_LOCAL_URLS=true 已开启：所有 localhost 和内网地址校验都会被跳过。Fake-IP trusted 模式无法恢复这部分防护。'
+        : '';
+      updateNetworkSecurityEditor();
+      renderReadiness();
+    }
+
+    function updateNetworkSecurityEditor() {
+      $('network-security-save').disabled = !state.networkSecurityDirty;
+      if (state.networkSecurityDirty) $('network-security-status').textContent = '有尚未保存的更改。';
+    }
+
+    async function saveNetworkSecurity() {
+      $('network-security-save').disabled = true;
+      $('network-security-reset').disabled = true;
+      $('network-security-status').textContent = '正在保存';
+      try {
+        const result = await postJson('/network/security', {
+          fake_ip_trust_enabled: $('fake-ip-trust-enabled').checked,
+          fake_ip_cidrs: $('fake-ip-cidrs').value
+        });
+        state.networkSecurity = result;
+        state.networkSecurityDirty = false;
+        $('fake-ip-cidrs').value = (result.fake_ip_cidrs || []).join('\\n');
+        $('network-security-status').textContent = result.fake_ip_trust_enabled
+          ? '已启用 trusted 模式，新提交的链接立即使用这些网段。'
+          : '已恢复严格模式，所有非公网解析结果都会被拒绝。';
+        $('network-security-pill').textContent = result.fake_ip_trust_enabled ? '已信任代理' : '严格模式';
+        $('network-security-pill').className = `status ${result.fake_ip_trust_enabled ? 'queued' : 'succeeded'}`;
+        toast(result.fake_ip_trust_enabled ? 'Fake-IP trusted 模式已启用' : '已恢复严格 URL 校验');
+        renderReadiness();
+      } catch (error) {
+        $('network-security-status').textContent = `保存失败：${error.message}`;
+        toast(`网络设置保存失败：${error.message}`, 'error');
+      } finally {
+        $('network-security-reset').disabled = false;
+        updateNetworkSecurityEditor();
+      }
+    }
+
     async function loadAgentStatus() {
       const agent = await getJson('/agent/status');
       state.agent = agent;
@@ -2493,6 +2670,7 @@ INDEX_HTML = """<!doctype html>
       };
       $('agent-mcp-config').textContent = JSON.stringify(mcpConfig, null, 2);
       $('agent-skill-command').textContent = agent.install_command || 'scripts/easysourceflow install-skill "$AGENT_WORKSPACE"';
+      renderReadiness();
     }
 
     async function copyText(text, successMessage) {
@@ -2513,6 +2691,7 @@ INDEX_HTML = """<!doctype html>
 
     async function loadRuntimeStatus() {
       const [cookies, youtubeCookies, model] = await Promise.all([getJson('/cookies/bilibili'), getJson('/cookies/youtube'), getJson('/model')]);
+      state.runtimeStatus = { bilibili: cookies, youtube: youtubeCookies };
       const asr = model.asr || {};
       const parsers = model.document_parsers || {};
       renderSettingsPanel(cookies, youtubeCookies, model);
@@ -2557,6 +2736,7 @@ INDEX_HTML = """<!doctype html>
           <div class="meta">TXT、HTML、DOCX、EPUB ${parsers.docx && parsers.epub ? '均可用' : '部分需处理'}</div>
         </div>
       `;
+      renderReadiness();
     }
 
     function bilibiliCookieMessage(cookies) {
@@ -2598,20 +2778,20 @@ INDEX_HTML = """<!doctype html>
       renderLoginImportStatus('youtube', youtubeCookies);
       const service = currentModelService(model);
       $('model-service-pill').textContent = service.label || model.provider || '-';
-      $('current-model-pill').textContent = model.model || '-';
-      $('current-provider-pill').textContent = service.label || model.provider || '-';
-      $('current-model-summary').textContent = `${model.model || '-'} · Pro ${model.strong_model || '-'}`;
-      $('current-model-endpoint').textContent = model.provider === 'local' ? '本地抽取式兜底，不调用外部 API。' : `${service.label || model.provider} · ${model.model_base_url || model.deepseek_base_url || ''}`;
+      $('current-provider-pill').textContent = `当前：${service.label || model.provider || '-'}`;
       $('sidebar-model').textContent = model.strong_model || model.model || '-';
       $('header-model').textContent = model.strong_model || model.model || '-';
       if (!state.settingsDirty) {
         renderModelServiceOptions(service.id || 'deepseek');
-        renderModelChoiceOptions(service, model, false);
-        $('config-api-key').value = '';
-        $('config-clear-key').checked = false;
+        const mismatchedModels = renderModelChoiceOptions(service, model, false);
+        if (mismatchedModels) {
+          state.settingsDirty = true;
+          setModelStatus(`检测到旧配置中的模型名称不属于 ${service.label}，已恢复为该服务商预设；请确认后设为当前模型。`);
+        }
       }
-      renderModelProviderButtons();
+      if (!state.credentialDirty) $('config-api-key').value = '';
       renderCredentialStatus(selectedModelService());
+      renderCredentialList();
       updateModelDraftState();
     }
 
@@ -2664,13 +2844,23 @@ INDEX_HTML = """<!doctype html>
       select.value = selectedId || 'deepseek';
     }
 
+    function modelOwnedByOtherService(service, name) {
+      return Boolean(name && (state.modelServices || []).some((candidate) => (
+        candidate.id !== service.id && (candidate.models || []).includes(name)
+      )));
+    }
+
+    function modelForService(service, name, fallback) {
+      return modelOwnedByOtherService(service, name) ? fallback : (name || fallback);
+    }
+
     function renderModelChoiceOptions(service, model, preserve = true) {
       const previousModel = preserve ? $('model-name').value : '';
       const previousStrongModel = preserve ? $('strong-model-name').value : '';
       const names = [...(service.models || [])];
       const activeService = currentModelService(model || {});
       if (activeService.id === service.id) [model.model, model.strong_model].forEach((name) => {
-        if (name && !names.includes(name)) names.push(name);
+        if (name && !modelOwnedByOtherService(service, name) && !names.includes(name)) names.push(name);
       });
       const options = names.map((name) => `<option value="${esc(name)}"></option>`).join('');
       $('model-name-options').innerHTML = options;
@@ -2679,24 +2869,15 @@ INDEX_HTML = """<!doctype html>
       const serviceStrong = names.includes(service.strong_model) ? service.strong_model : names[1] || serviceDefault;
       const defaultModel = previousModel && names.includes(previousModel)
         ? previousModel
-        : (activeService.id === service.id && names.includes(model.model) ? model.model : serviceDefault);
+        : (activeService.id === service.id ? modelForService(service, model.model, serviceDefault) : serviceDefault);
       const defaultStrong = previousStrongModel && names.includes(previousStrongModel)
         ? previousStrongModel
-        : (activeService.id === service.id && names.includes(model.strong_model) ? model.strong_model : serviceStrong);
+        : (activeService.id === service.id ? modelForService(service, model.strong_model, serviceStrong) : serviceStrong);
       $('model-name').value = defaultModel || '';
       $('strong-model-name').value = defaultStrong || defaultModel || '';
-    }
-
-    function renderModelProviderButtons() {
-      const container = $('model-provider-list');
-      if (!container) return;
-      const selectedId = $('model-service').value;
-      container.innerHTML = (state.modelServices || []).map((service) => `
-        <button class="model-provider-button ${service.id === selectedId ? 'active' : ''}" type="button" data-service-id="${esc(service.id)}">${esc(service.label)}</button>
-      `).join('');
-      container.querySelectorAll('[data-service-id]').forEach((button) => {
-        button.addEventListener('click', () => selectModelService(button.dataset.serviceId));
-      });
+      return activeService.id === service.id && (
+        modelOwnedByOtherService(service, model.model) || modelOwnedByOtherService(service, model.strong_model)
+      );
     }
 
     function selectModelService(serviceId) {
@@ -2704,8 +2885,9 @@ INDEX_HTML = """<!doctype html>
       $('model-service').value = serviceId;
       const service = selectedModelService();
       renderModelChoiceOptions(service, state.model || {}, false);
+      $('config-api-key').value = '';
+      state.credentialDirty = false;
       markModelDirty();
-      renderModelProviderButtons();
       renderCredentialStatus(service);
     }
 
@@ -2722,10 +2904,36 @@ INDEX_HTML = """<!doctype html>
       $('model-key-status').textContent = isFallback
         ? '本地抽取式兜底不需要 API Key。'
         : keyOptional
-          ? configured ? '已配置可选 API Key；留空不会修改。' : '默认不需要 API Key；服务端启用鉴权时再填写。'
-        : configured ? `${service.label} 的 API Key 已配置，留空不会修改。` : `${service.label} 尚未配置 API Key。`;
+          ? configured ? '已保存可选 API Key，可在下方清单中选择或删除。' : '默认不需要 API Key；服务端启用鉴权时再填写。'
+        : configured ? `${service.label} 的 API Key 已保存，可在下方清单中选择或删除。` : `${service.label} 尚未配置 API Key。`;
       $('config-api-key').disabled = isFallback;
-      $('config-clear-key').disabled = isFallback || !configured;
+      $('model-key-field').hidden = isFallback;
+    }
+
+    function renderCredentialList() {
+      const configured = (state.modelServices || []).filter((service) => (
+        service.id !== 'local' && state.model?.credential_status?.[service.id]
+      ));
+      const activeService = currentModelService(state.model || {});
+      $('configured-model-count').textContent = `${configured.length} 个配置`;
+      $('model-credential-list').innerHTML = configured.map((service) => `
+        <div class="credential-item">
+          <button class="credential-select" type="button" data-use-credential="${esc(service.id)}">
+            <span class="credential-chevron" aria-hidden="true">›</span>
+            <span><span class="credential-title-line"><strong>${esc(service.label)}</strong>${service.id === activeService.id ? '<span class="credential-current">当前使用</span>' : ''}</span><span class="meta">API Key 已安全保存 · Fast ${esc(service.id === activeService.id ? modelForService(service, state.model.model, service.default_model) : service.default_model)} · Pro ${esc(service.id === activeService.id ? modelForService(service, state.model.strong_model, service.strong_model) : service.strong_model)}</span></span>
+          </button>
+          <button class="credential-delete" type="button" title="删除 API Key" aria-label="删除 ${esc(service.label)} API Key" data-delete-credential="${esc(service.id)}">×</button>
+        </div>
+      `).join('') || '<div class="empty">尚未配置模型。请在上方选择服务商并填写 API Key。</div>';
+      $('model-credential-list').querySelectorAll('[data-use-credential]').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectModelService(button.dataset.useCredential);
+          setModelStatus('已选择该配置，确认模型名称后点击“设为当前模型”。');
+        });
+      });
+      $('model-credential-list').querySelectorAll('[data-delete-credential]').forEach((button) => {
+        button.addEventListener('click', () => deleteModelCredential(button.dataset.deleteCredential));
+      });
     }
 
     function markModelDirty() {
@@ -2734,19 +2942,22 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateModelDraftState() {
-      $('model-unsaved-notice')?.classList.toggle('visible', state.settingsDirty);
-      $('settings-model-test-button').disabled = state.settingsDirty;
+      $('model-unsaved-notice')?.classList.toggle('visible', state.settingsDirty || state.credentialDirty);
     }
 
     async function testModel() {
-      if (state.settingsDirty) {
-        setModelStatus('请先保存当前配置，再测试生效模型。');
-        return false;
-      }
+      const service = selectedModelService();
       setModelStatus('测试中');
       $('settings-model-test-button').disabled = true;
       try {
-        const result = await postJson('/model/test', {});
+        const result = await postJson('/model/test', {
+          service_id: service.id,
+          provider: service.provider,
+          model: $('model-name').value,
+          strong_model: $('strong-model-name').value,
+          model_base_url: service.base_url,
+          model_api_key: $('config-api-key').value.trim()
+        });
         setModelStatus(result.ok ? '模型连通正常' : `模型测试失败：${result.check?.message || 'unknown'}`);
         toast(result.ok ? '模型测试通过' : '模型测试失败', result.ok ? 'info' : 'error');
         return Boolean(result.ok);
@@ -2755,7 +2966,7 @@ INDEX_HTML = """<!doctype html>
         toast(`模型测试失败：${error.message}`, 'error');
         return false;
       } finally {
-        $('settings-model-test-button').disabled = state.settingsDirty;
+        $('settings-model-test-button').disabled = false;
       }
     }
 
@@ -2764,41 +2975,66 @@ INDEX_HTML = """<!doctype html>
       $('settings-model-status').textContent = message;
     }
 
-    async function saveModelConfig(testAfterSave = true) {
-      $('config-status').textContent = '保存中';
-      $('config-save-button').disabled = true;
-      const service = selectedModelService();
+    async function deleteModelCredential(serviceId) {
+      const service = (state.modelServices || []).find((item) => item.id === serviceId);
+      if (!service || !confirm(`确认删除 ${service.label} 的 API Key？删除后无法恢复。`)) return;
+      setModelStatus(`正在删除 ${service.label} 的 API Key`);
       try {
+        const result = await postJson('/model/credentials/delete', { service_id: serviceId });
+        state.model = result.model;
+        renderCredentialStatus(selectedModelService());
+        renderCredentialList();
+        renderReadiness();
+        setModelStatus(`${service.label} 的 API Key 已删除。`);
+        toast(`${service.label} API Key 已删除`);
+        await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
+      } catch (error) {
+        setModelStatus(`删除失败：${error.message}`);
+        toast(`删除失败：${error.message}`, 'error');
+      }
+    }
+
+    async function saveModelChoice() {
+      const service = selectedModelService();
+      const apiKey = $('config-api-key').value.trim();
+      const requiresKey = service.provider !== 'local' && service.requires_api_key !== false;
+      if (requiresKey && !apiKey && !state.model?.credential_status?.[service.id]) {
+        setModelStatus(`请输入 ${service.label} 的 API Key。`);
+        $('config-api-key').focus();
+        return false;
+      }
+      $('model-save-button').disabled = true;
+      setModelStatus('正在保存并验证模型');
+      try {
+        if (apiKey) {
+          const credential = await postJson('/model/credentials', {
+            service_id: service.id,
+            model_api_key: apiKey
+          });
+          state.model = credential.model;
+        }
         const result = await postJson('/model', {
           service_id: service.id,
           provider: service.provider,
           model: $('model-name').value,
           strong_model: $('strong-model-name').value,
-          model_base_url: service.base_url,
-          model_api_key: $('config-api-key').value.trim(),
-          clear_model_api_key: $('config-clear-key').checked
+          model_base_url: service.base_url
         });
         state.settingsDirty = false;
+        state.credentialDirty = false;
         state.model = result.model;
         $('config-api-key').value = '';
-        $('config-clear-key').checked = false;
-        $('config-status').textContent = `已保存：${service.label}`;
-        toast(`已启用 ${service.label} · ${result.model.model}`);
         updateModelDraftState();
+        toast(`已启用 ${service.label} · ${result.model.model}`);
         await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
-        if (testAfterSave) await testModel();
-        return true;
+        return testModel();
       } catch (error) {
-        $('config-status').textContent = `保存失败：${error.message}`;
+        setModelStatus(`保存失败：${error.message}`);
         toast(`保存失败：${error.message}`, 'error');
         return false;
       } finally {
-        $('config-save-button').disabled = false;
+        $('model-save-button').disabled = false;
       }
-    }
-
-    async function saveModelChoice() {
-      return saveModelConfig(false);
     }
 
     async function openBilibiliLogin() {
@@ -2914,7 +3150,7 @@ INDEX_HTML = """<!doctype html>
       $('fulltext-results').innerHTML = visible.map((item) => `
           <div class="row">
             <div class="row-head">
-              <a class="title" href="${esc(item.view_url)}">${highlightText(item.title, query)}</a>
+              <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${highlightText(item.title, query)}</a>
               <span class="status">${esc(item.source_type)}</span>
             </div>
             <div class="meta">${esc(item.date)} · ${Math.ceil(item.size / 1024)} KB</div>
@@ -2959,11 +3195,12 @@ INDEX_HTML = """<!doctype html>
       if (!state.initialized || activePanel === 'submit-panel') tasks.push(loadBatches());
       if (!state.initialized || activePanel === 'download-panel') tasks.push(loadDownloads());
       if (!state.initialized || activePanel === 'maintenance-panel') {
-        tasks.push(loadHealth(), loadRuntimeStatus(), loadMaintenanceStatus(), loadPromptSettings(), loadAgentStatus());
+        tasks.push(loadHealth(), loadRuntimeStatus(), loadMaintenanceStatus(), loadPromptSettings(), loadAgentStatus(), loadNetworkSecurity());
       }
       const results = await Promise.allSettled(tasks);
       const failed = results.filter((result) => result.status === 'rejected');
       if (failed.length) {
+        $('readiness-button').className = 'service-state blocked';
         $('service-dot').className = 'service-dot bad';
         $('service-label').textContent = '部分数据刷新失败';
         if (manual) toast('部分数据刷新失败，请检查服务状态', 'error');
@@ -2992,8 +3229,8 @@ INDEX_HTML = """<!doctype html>
       $('file-hint').textContent = file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : '支持 txt、md、字幕、HTML、DOCX、EPUB、PDF。文件内容在浏览器读取后提交给本机服务。';
     });
     $('settings-model-test-button').addEventListener('click', testModel);
-    $('config-save-button').addEventListener('click', saveModelConfig);
     $('model-save-button').addEventListener('click', saveModelChoice);
+    $('readiness-button').addEventListener('click', openReadinessTarget);
     $('bilibili-open-login-button').addEventListener('click', openBilibiliLogin);
     $('bilibili-import-button').addEventListener('click', importBilibiliCookies);
     $('bilibili-logout-button').addEventListener('click', () => disconnectPlatformLogin('bilibili'));
@@ -3007,15 +3244,33 @@ INDEX_HTML = """<!doctype html>
     });
     $('prompt-save-button').addEventListener('click', () => savePrompt());
     $('prompt-reset-button').addEventListener('click', () => savePrompt(state.prompt?.default_prompt || ''));
+    $('fake-ip-trust-enabled').addEventListener('change', () => {
+      state.networkSecurityDirty = true;
+      updateNetworkSecurityEditor();
+    });
+    $('fake-ip-cidrs').addEventListener('input', () => {
+      state.networkSecurityDirty = true;
+      updateNetworkSecurityEditor();
+    });
+    $('network-security-save').addEventListener('click', saveNetworkSecurity);
+    $('network-security-reset').addEventListener('click', () => {
+      $('fake-ip-cidrs').value = (state.networkSecurity?.default_fake_ip_cidrs || ['198.18.0.0/15']).join('\\n');
+      state.networkSecurityDirty = true;
+      updateNetworkSecurityEditor();
+    });
     $('copy-mcp-config').addEventListener('click', () => copyText($('agent-mcp-config').textContent, 'MCP 配置已复制'));
     $('copy-skill-command').addEventListener('click', () => copyText($('agent-skill-command').textContent, 'Skill 安装命令已复制'));
-    ['model-name', 'strong-model-name', 'config-api-key', 'config-clear-key'].forEach((id) => {
+    ['model-name', 'strong-model-name'].forEach((id) => {
       $(id).addEventListener('input', () => {
         markModelDirty();
       });
       $(id).addEventListener('change', () => {
         markModelDirty();
       });
+    });
+    $('config-api-key').addEventListener('input', () => {
+      state.credentialDirty = Boolean($('config-api-key').value);
+      updateModelDraftState();
     });
     $('fulltext-button').addEventListener('click', fulltextSearch);
     $('search-more-button').addEventListener('click', () => {
@@ -3032,7 +3287,13 @@ INDEX_HTML = """<!doctype html>
     $('job-search').addEventListener('input', renderJobs);
     $('job-status-filter').addEventListener('change', renderJobs);
     document.querySelectorAll('.tab-button').forEach((button) => {
-      button.addEventListener('click', () => activateTab(button.dataset.tab));
+      button.addEventListener('click', () => {
+        if (button.dataset.tab === 'outputs-panel') {
+          window.open(new URL('#results', location.href).href, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        activateTab(button.dataset.tab);
+      });
       button.addEventListener('keydown', (event) => {
         if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
         event.preventDefault();
@@ -3080,7 +3341,7 @@ INDEX_HTML = """<!doctype html>
     setInterval(tickClock, 1000);
     restoreRoute();
     refreshAll();
-    setInterval(refreshAll, 5000);
+    setInterval(refreshAll, 2000);
   </script>
 </body>
 </html>
