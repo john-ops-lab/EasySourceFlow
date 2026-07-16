@@ -11,7 +11,7 @@
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-本地优先-111111?logo=apple&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-Agent%20Ready-00A67E)
-[![Version](https://img.shields.io/badge/version-v0.6.0-FF0000)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.6.1-FF0000)](CHANGELOG.md)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ![EasySourceFlow Web 控制台](docs/assets/web-console.png)
@@ -93,7 +93,7 @@ scripts/easysourceflow open
 2. 如果使用 Clash、Surge、Mihomo 等代理，先按下方“Fake-IP 代理”说明检查网络；不要直接关闭本地 URL 防护。
 3. 处理 Bilibili 或 YouTube 前，进入“维护 → 账号与授权”完成扫码或登录。仅处理普通公开网页时可以跳过。
 4. 按需进入“维护 → 提示词”调整通用总结模板，进入“维护 → Agent 接入”复制 MCP 配置并安装 Skill。
-5. 查看左下角状态：绿色“已就绪”表示必要配置正常；其他颜色可以点击并直接跳到待处理页面。
+5. 查看左下角状态：绿色“已就绪”表示全部检查正常；黄色可能只是 Bilibili/YouTube 尚未登录，不影响公开网页，红色需要点击并按引导处理。
 
 完成后回到“新总结”，先提交一个公开网页链接验证模型和输出，再测试需要登录或本地 ASR 的视频。
 

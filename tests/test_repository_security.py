@@ -45,6 +45,12 @@ class RepositorySecurityTests(unittest.TestCase):
 
         self.assertTrue(required.issubset(rules))
 
+    def test_example_model_key_is_empty(self):
+        example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY=\n", example)
+        self.assertNotIn("REPLACE_WITH_MODEL_API_KEY", example)
+
     def test_security_scan_uses_generic_workspace_pattern(self):
         policy = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         self.assertIn("workspace-[A-Za-z0-9_-]+", policy)
