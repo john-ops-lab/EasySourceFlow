@@ -24,6 +24,8 @@ class UrlValidationTests(unittest.TestCase):
             with self.assertRaises(EasySourceFlowError) as error:
                 normalize_url("https://www.bilibili.com/video/BV1example")
         self.assertEqual(error.exception.code, "invalid_url")
+        self.assertIn("Fake-IP range 198.18.0.0/15", error.exception.message)
+        self.assertTrue(any("网络与安全" in step for step in error.exception.next_steps))
 
     def test_trusted_mode_allows_configured_fake_ip_for_domain(self):
         with patch("easysourceflow_core.url_utils.socket.getaddrinfo", return_value=_records("198.18.0.30")):

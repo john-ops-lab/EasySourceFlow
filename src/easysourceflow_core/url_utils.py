@@ -14,6 +14,7 @@ from .errors import invalid_url
 TRACKING_PREFIXES = ("utm_",)
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "spm", "vd_source"}
 DEFAULT_FAKE_IP_CIDRS = ("198.18.0.0/15",)
+_DEFAULT_FAKE_IP_NETWORKS = tuple(ipaddress.ip_network(value) for value in DEFAULT_FAKE_IP_CIDRS)
 _NEVER_TRUSTED_CIDRS = tuple(
     ipaddress.ip_network(value)
     for value in (
@@ -146,4 +147,9 @@ def _validate_public_host(
         if any(ip.version == network.version and ip in network for network in trusted_networks):
             continue
         if not ip.is_global:
+            if any(ip.version == network.version and ip in network for network in _DEFAULT_FAKE_IP_NETWORKS):
+                raise invalid_url(
+                    f"URL host resolved to {ip}, which is in the common Fake-IP range 198.18.0.0/15. "
+                    "If your local proxy owns this range, enable it in Web under Maintenance > Network & Security."
+                )
             raise invalid_url("Private, local, and reserved network URLs are disabled by default.")

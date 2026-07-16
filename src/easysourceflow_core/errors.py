@@ -30,7 +30,10 @@ def invalid_url(message: str) -> EasySourceFlowError:
     return EasySourceFlowError(
         code="invalid_url",
         message=message,
-        next_steps=["Provide a valid public http or https URL."],
+        next_steps=[
+            "确认链接是完整的公开 http 或 https URL。",
+            "如果使用 Clash、Surge 或 Mihomo 的 Fake-IP 模式，请检查 Web 中的“维护 → 网络与安全”。",
+        ],
     )
 
 
