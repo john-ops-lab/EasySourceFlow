@@ -44,7 +44,15 @@ scripts/easysourceflow install-skill "$AGENT_WORKSPACE"
 <agent-workspace>/skills/easysourceflow/SKILL.md
 ```
 
-Skill 规定所有单链接默认使用可恢复的异步流程、视频默认使用 Pro、最终 Markdown 原样交付、不得二次总结，以及用户回复“收藏”时收藏最近结果。
+Skill 规定所有单链接默认使用可恢复的异步流程、视频默认使用 Pro、最终 Markdown 原样交付、不得二次总结，以及用户回复“收藏”时收藏最近结果。飞书 `message` 工具的 `card` 参数必须传对象而不是 JSON 字符串；卡片发送失败时也只能回退为完整原始 Markdown，不能改成缩略总结。
+
+OpenClaw Agent 如果配置了 `agents.list[].skills` 白名单，还必须在目标 Agent 的现有列表中追加 `easysourceflow`，否则文件虽然已经复制，Skill 仍不会进入系统提示。先用 `openclaw config get agents.list --json` 找到目标 Agent，保留原有 Skill 后追加该名称，再运行：
+
+```bash
+openclaw gateway restart
+```
+
+可在一次 `openclaw agent --agent <agent-id> ... --json` 的 `systemPromptReport.skills.entries` 中确认已出现 `easysourceflow`。
 
 正常提交保持 `force_refresh=false` 以复用仍有效的缓存。只有用户明确要求重新抓取、重新转写、重新生成或忽略旧结果时才传 `true`；任务重试默认强制刷新。
 

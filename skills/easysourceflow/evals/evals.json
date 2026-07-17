@@ -35,6 +35,18 @@
         "Confirms the favorite operation concisely",
         "Does not resend or rewrite the summary"
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "把刚完成的 EasySourceFlow 总结用飞书 Markdown 卡片发给我；卡片参数如果报错也不要缩写。",
+      "expected_output": "The agent passes the Feishu card as an object and preserves EasySourceFlow's complete final Markdown even if card delivery needs a fallback.",
+      "files": [],
+      "expectations": [
+        "Passes the card argument as an object rather than a JSON string",
+        "Uses the exact result.summary_markdown as the card Markdown content",
+        "Corrects a card type validation error before retrying",
+        "Falls back to the complete unchanged Markdown rather than a shorter summary"
+      ]
     }
   ]
 }

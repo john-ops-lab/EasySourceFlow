@@ -586,6 +586,7 @@ install_agent_skill() {
   mkdir -p "${target}"
   rsync -a --delete "${ROOT_DIR}/skills/easysourceflow/" "${target}/"
   printf 'Installed EasySourceFlow skill: %s\n' "${target}"
+  printf 'OpenClaw: if the target agent defines an agents.list[].skills allowlist, add "easysourceflow" and restart the gateway.\n'
 }
 
 maintenance_run() {

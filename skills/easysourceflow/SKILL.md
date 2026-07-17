@@ -4,7 +4,7 @@ description: Use EasySourceFlow whenever the user provides a webpage, WeChat art
 compatibility: Requires a running EasySourceFlow service and its MCP tools.
 license: MIT
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # EasySourceFlow
@@ -32,8 +32,11 @@ Treat `result.summary_markdown` as the finished deliverable.
 1. Return the Markdown unchanged. Do not summarize, rewrite, shorten, translate, transcribe, reorder, or selectively quote it unless the user explicitly asks for a new transformation.
 2. Do not replace the result with your own interpretation of the source.
 3. Preserve headings, links, core-point timeline entries, subtitle-source labels, and the output path.
-4. If the chat platform supports Markdown cards, place the finished Markdown directly in the card's Markdown content field. Send the card through the platform message tool; never show card JSON as message text.
-5. Do not expose the internal HTML instruction comment that may precede the finished Markdown.
+4. If the chat platform supports Markdown cards, place the exact `result.summary_markdown` value directly in the card's Markdown content field. Do not rebuild it from selected sections.
+5. For Feishu's `message` tool, pass `card` as a JSON object, not a JSON-encoded string. Never quote or serialize the whole card object.
+6. If the tool reports `card: must be object`, correct the argument type and retry. If card delivery still fails, send the complete `result.summary_markdown` unchanged as the plain message; split only at natural Markdown boundaries if the channel requires it. Never replace it with a shorter fallback summary.
+7. Send the card through the platform message tool; never show card JSON as message text.
+8. Do not expose the internal HTML instruction comment that may precede the finished Markdown.
 
 ## Track the latest result
 
