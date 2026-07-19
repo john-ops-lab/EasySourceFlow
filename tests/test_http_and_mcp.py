@@ -275,6 +275,8 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertFalse(before["activity"]["recent"])
                     self.assertNotIn(str(root), json.dumps(before, ensure_ascii=False))
                     self.assertEqual(before["mcp"]["command"], "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp")
+                    self.assertEqual(before["session_refresh_command"], "/new")
+                    self.assertIn("单独发送 /new", before["session_refresh_message"])
 
                     heartbeat = Request(
                         f"{base_url}/health",
@@ -1032,6 +1034,7 @@ class HttpAndMcpTests(unittest.TestCase):
             self.assertIn("easysourceflow_retry_job", names)
             self.assertIn("easysourceflow_cancel_job", names)
             self.assertIn("easysourceflow_submit_document", names)
+            self.assertIn("easysourceflow_submit_document_file", names)
             self.assertIn("easysourceflow_search_outputs", names)
             self.assertIn("easysourceflow_bilibili_cookie_status", names)
             self.assertIn("easysourceflow_model_status", names)
@@ -1048,6 +1051,36 @@ class HttpAndMcpTests(unittest.TestCase):
             proc.stdin.close()
             proc.stdout.close()
             proc.stderr.close()
+
+    def test_mcp_document_file_only_reads_configured_upload_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            upload_root = root / "uploads"
+            upload_root.mkdir()
+            allowed = upload_root / "report.pdf"
+            allowed.write_bytes(b"test-pdf-bytes")
+            blocked = root / "private.pdf"
+            blocked.write_bytes(b"private")
+            env = {"EASYSOURCEFLOW_DOCUMENT_IMPORT_ROOTS": str(upload_root)}
+            with patch.dict(os.environ, env, clear=False), patch(
+                "easysourceflow_mcp.server._post_json",
+                return_value={"job_id": "job_test", "status": "queued"},
+            ) as post_json:
+                accepted = call_tool(
+                    "easysourceflow_submit_document_file",
+                    {"file_path": str(allowed), "title": "原始文件名.pdf"},
+                )
+                rejected = call_tool(
+                    "easysourceflow_submit_document_file",
+                    {"file_path": str(blocked), "title": "private.pdf"},
+                )
+
+            self.assertFalse(accepted["isError"])
+            payload = post_json.call_args.args[1]
+            self.assertEqual(payload["title"], "原始文件名.pdf")
+            self.assertEqual(payload["data_base64"], b64encode(b"test-pdf-bytes").decode("ascii"))
+            self.assertTrue(rejected["isError"])
+            self.assertEqual(rejected["structuredContent"]["error"]["code"], "document_path_not_allowed")
 
     def test_mcp_read_json_handles_non_json_http_errors(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), ErrorHandler)

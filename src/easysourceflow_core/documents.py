@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import base64
+import logging
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import zipfile
 from html.parser import HTMLParser
 from io import BytesIO
@@ -16,6 +22,7 @@ from .errors import EasySourceFlowError, dependency_missing
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".srt", ".vtt", ".csv", ".json", ".xml", ".yaml", ".yml"}
 HTML_SUFFIXES = {".html", ".htm"}
+logger = logging.getLogger(__name__)
 
 
 def document_payload_to_text(payload: dict) -> Tuple[str, str, dict]:
@@ -150,7 +157,51 @@ def _pdf_to_text(raw: bytes) -> str:
         text = page.extract_text() or ""
         if text.strip():
             pages.append(f"[Page {index}]\n{text.strip()}")
-    return _clean_lines("\n\n".join(pages))
+    extracted = _clean_lines("\n\n".join(pages))
+    if extracted:
+        return extracted
+    ocr_text = _macos_pdf_ocr(raw)
+    if ocr_text:
+        return _clean_lines(ocr_text)
+    raise EasySourceFlowError(
+        code="document_text_unavailable",
+        message="The PDF has no extractable text layer and no supported OCR backend is available.",
+        next_steps=[
+            "On macOS, install the Xcode Command Line Tools so EasySourceFlow can use the built-in Vision OCR backend.",
+            "Otherwise run OCR on the PDF first, then upload the searchable PDF or extracted text.",
+        ],
+    )
+
+
+def _macos_pdf_ocr(raw: bytes) -> str:
+    if sys.platform != "darwin" or not shutil.which("xcrun"):
+        return ""
+    helper = Path(__file__).with_name("macos_pdf_ocr.swift")
+    if not helper.is_file():
+        return ""
+    try:
+        timeout = int(os.environ.get("EASYSOURCEFLOW_PDF_OCR_TIMEOUT_SECONDS", "1800"))
+    except ValueError:
+        timeout = 1800
+    timeout = max(60, min(timeout, 7200))
+    with tempfile.TemporaryDirectory(prefix="easysourceflow-pdf-ocr-") as tmp:
+        source = Path(tmp) / "document.pdf"
+        source.write_bytes(raw)
+        try:
+            result = subprocess.run(
+                ["xcrun", "swift", str(helper), str(source)],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            logger.warning("macOS PDF OCR failed to start or timed out", exc_info=True)
+            return ""
+    if result.returncode != 0:
+        logger.warning("macOS PDF OCR failed returncode=%s", result.returncode)
+        return ""
+    return result.stdout.strip()
 
 
 def _clean_lines(text: str) -> str:

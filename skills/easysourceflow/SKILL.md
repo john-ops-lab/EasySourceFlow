@@ -1,10 +1,10 @@
 ---
 name: easysourceflow
-description: Use EasySourceFlow whenever the user provides a webpage, WeChat article, Bilibili video, YouTube link, or document and wants it summarized, transcribed, turned into notes, searched later, or saved as a favorite. Also use it when the user asks about an EasySourceFlow job, previous result, subtitle source, local ASR, or replies "收藏" after receiving a result.
+description: Use EasySourceFlow whenever the user provides a webpage, WeChat article, Bilibili video, YouTube link, or supported document. A bare supported link or attachment with no written request means "summarize this with EasySourceFlow" by default; trigger this skill even when the user does not say summarize. Also use it for notes, transcription, previous results, subtitle source, local ASR, search, or favorites. Do not trigger only when the user explicitly requests a different operation such as translation or editing.
 compatibility: Requires a running EasySourceFlow service and its MCP tools.
 license: MIT
 metadata:
-  version: "0.1.1"
+  version: "0.1.3"
 ---
 
 # EasySourceFlow
@@ -13,11 +13,16 @@ Use EasySourceFlow as the single content-processing pipeline. Do not reproduce i
 
 ## Choose the workflow
 
+- Treat a message containing only a supported URL or a PDF, DOCX, EPUB, TXT, Markdown, or HTML attachment as an implicit EasySourceFlow summary request. An explicit user instruction takes precedence.
 - For every single URL, including webpages, WeChat articles, Bilibili, and YouTube, call `easysourceflow_submit_link` and retain its `job_id`.
 - Call `easysourceflow_get_job` with that `job_id` and `wait_seconds=45`. If it remains queued or running, call the same tool again until it reaches a terminal state.
 - Treat `easysourceflow_summarize_link` as a compatibility tool for short non-video webpages only. Do not choose it for new Agent workflows.
 - For multiple links, call `easysourceflow_submit_batch`, then poll `easysourceflow_get_batch`.
-- For pasted or uploaded document text, call `easysourceflow_submit_document`.
+- For an uploaded PDF, call `easysourceflow_submit_document_file` with the attachment path and original filename. Message-injected PDF text may be a truncated preview and must not be treated as the complete document.
+- For pasted text or a non-PDF attachment whose complete body is already present, call `easysourceflow_submit_document` after excluding transport metadata, local paths, wrapper tags, and untrusted-content markers. Use the original filename as `title`.
+- If the file submission tool is unavailable, report that the EasySourceFlow integration must be updated. Do not use a PDF model, document reader, inline preview, or the Agent's own model as a fallback summary.
+- A repeated link or attachment is still an EasySourceFlow request. Submit it normally with `force_refresh=false` so the service can reuse a valid cached result; never replace the tool call with a duplicate-content response.
+- Poll document jobs with `easysourceflow_get_job` exactly like URL jobs.
 - For old results, use `easysourceflow_search_outputs` or `easysourceflow_list_recent_jobs`.
 - Tool names may have an extra client-specific server prefix. Match the `easysourceflow_` suffixes above.
 

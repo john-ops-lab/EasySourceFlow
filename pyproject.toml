@@ -37,6 +37,9 @@ dev = ["pytest>=8.0.0", "ruff>=0.8.0"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+easysourceflow_core = ["macos_pdf_ocr.swift"]
+
 [tool.setuptools.dynamic]
 version = { attr = "easysourceflow_core.__version__" }
 

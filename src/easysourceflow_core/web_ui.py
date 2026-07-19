@@ -1626,7 +1626,12 @@ INDEX_HTML = """<!doctype html>
                 <pre class="code-block"><code id="agent-skill-command">读取中</code><button class="icon-button secondary copy-code" id="copy-skill-command" type="button" title="复制安装命令" aria-label="复制安装命令">⧉</button></pre>
               </div>
               <div class="settings-section">
-                <h3>3. 验证连接</h3>
+                <h3>3. 刷新 Agent 会话</h3>
+                <p id="agent-session-refresh-message">安装或更新 Skill 后，在目标 Agent 聊天中单独发送 /new。只重启服务不会清除旧会话的 Skill 快照。</p>
+                <pre class="code-block"><code id="agent-session-command">/new</code><button class="icon-button secondary copy-code" id="copy-agent-session-command" type="button" title="复制会话刷新命令" aria-label="复制会话刷新命令">⧉</button></pre>
+              </div>
+              <div class="settings-section">
+                <h3>4. 验证连接</h3>
                 <p>让 Agent 调用 EasySourceFlow 的健康检查或提交一个链接。本页会记录最近一次真实 MCP 调用，自动刷新后显示为“最近已连接”。</p>
               </div>
             </div>
@@ -2670,6 +2675,8 @@ INDEX_HTML = """<!doctype html>
       };
       $('agent-mcp-config').textContent = JSON.stringify(mcpConfig, null, 2);
       $('agent-skill-command').textContent = agent.install_command || 'scripts/easysourceflow install-skill "$AGENT_WORKSPACE"';
+      $('agent-session-command').textContent = agent.session_refresh_command || '/new';
+      $('agent-session-refresh-message').textContent = agent.session_refresh_message || '安装或更新 Skill 后，在目标 Agent 聊天中单独发送 /new。';
       renderReadiness();
     }
 
@@ -3260,6 +3267,7 @@ INDEX_HTML = """<!doctype html>
     });
     $('copy-mcp-config').addEventListener('click', () => copyText($('agent-mcp-config').textContent, 'MCP 配置已复制'));
     $('copy-skill-command').addEventListener('click', () => copyText($('agent-skill-command').textContent, 'Skill 安装命令已复制'));
+    $('copy-agent-session-command').addEventListener('click', () => copyText($('agent-session-command').textContent, '会话刷新命令已复制'));
     ['model-name', 'strong-model-name'].forEach((id) => {
       $(id).addEventListener('input', () => {
         markModelDirty();

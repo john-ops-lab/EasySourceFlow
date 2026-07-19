@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -145,6 +148,25 @@ TOOLS = [
         },
     },
     {
+        "name": "easysourceflow_submit_document_file",
+        "description": (
+            "Submit the original bytes of a user-uploaded document. Use this for PDF attachments even when the chat "
+            "contains preview text, because previews may be truncated. The file must be inside an approved Agent upload "
+            "directory; arbitrary local paths are rejected. Retain the returned job ID and poll easysourceflow_get_job."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Platform-provided path to the uploaded attachment."},
+                "title": {"type": "string", "description": "Original attachment filename shown to the user."},
+                "instruction": {"type": "string", "description": "User summary instruction.", "default": ""},
+                "summary_quality": {"type": "string", "enum": ["fast", "pro"], "description": "Summary model tier.", "default": "fast"},
+                "force_refresh": {"type": "boolean", "description": "Ignore cached results.", "default": False},
+            },
+            "required": ["file_path"],
+        },
+    },
+    {
         "name": "easysourceflow_submit_batch",
         "description": "Submit multiple public URLs for background processing and return a batch ID.",
         "inputSchema": {
@@ -239,6 +261,7 @@ _OPEN_WORLD_TOOLS = {
     "easysourceflow_submit_link",
     "easysourceflow_retry_job",
     "easysourceflow_submit_document",
+    "easysourceflow_submit_document_file",
     "easysourceflow_submit_batch",
 }
 _DESTRUCTIVE_TOOLS = {"easysourceflow_cancel_job", "easysourceflow_cleanup"}
@@ -377,6 +400,8 @@ def call_tool(name: Any, arguments: Dict[str, Any]) -> dict:
                     "force_refresh": arguments.get("force_refresh", False),
                 },
             )
+        elif name == "easysourceflow_submit_document_file":
+            payload = _submit_document_file(arguments)
         elif name == "easysourceflow_submit_batch":
             payload = _post_json(
                 "/batches",
@@ -425,6 +450,90 @@ def call_tool(name: Any, arguments: Dict[str, Any]) -> dict:
         "content": [{"type": "text", "text": text}],
         "structuredContent": payload,
         "isError": is_error,
+    }
+
+
+def _submit_document_file(arguments: Dict[str, Any]) -> dict:
+    try:
+        path = Path(str(arguments.get("file_path") or "")).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return _document_file_error("uploaded_file_missing", "The uploaded attachment is no longer available.")
+    if not path.is_file():
+        return _document_file_error("uploaded_file_missing", "The uploaded attachment is not a regular file.")
+    if not any(_is_relative_to(path, root) for root in _document_import_roots()):
+        return _document_file_error(
+            "document_path_not_allowed",
+            "The attachment is outside the configured Agent upload directories.",
+            ["Add the upload directory to EASYSOURCEFLOW_DOCUMENT_IMPORT_ROOTS and restart the Agent gateway."],
+        )
+    allowed_suffixes = {".txt", ".md", ".markdown", ".html", ".htm", ".docx", ".epub", ".pdf"}
+    if path.suffix.lower() not in allowed_suffixes:
+        return _document_file_error("unsupported_document", "This attachment type is not supported.")
+    max_bytes = _document_import_max_bytes()
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return _document_file_error("uploaded_file_missing", "The uploaded attachment could not be inspected.")
+    if size <= 0 or size > max_bytes:
+        return _document_file_error(
+            "document_too_large",
+            f"The attachment must be between 1 byte and {max_bytes // (1024 * 1024)} MiB.",
+        )
+    try:
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return _document_file_error("uploaded_file_unreadable", "The uploaded attachment could not be read.")
+    return _post_json(
+        "/documents",
+        {
+            "title": str(arguments.get("title") or path.name),
+            "data_base64": encoded,
+            "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "instruction": arguments.get("instruction", ""),
+            "summary_quality": arguments.get("summary_quality", "fast"),
+            "force_refresh": arguments.get("force_refresh", False),
+        },
+    )
+
+
+def _document_import_roots() -> list[Path]:
+    roots = [Path.home() / ".openclaw" / "media" / "inbound"]
+    configured = os.environ.get("EASYSOURCEFLOW_DOCUMENT_IMPORT_ROOTS", "")
+    for value in configured.split(os.pathsep):
+        if value.strip():
+            roots.append(Path(value.strip()).expanduser())
+    resolved = []
+    for root in roots:
+        try:
+            resolved.append(root.resolve())
+        except OSError:
+            continue
+    return resolved
+
+
+def _document_import_max_bytes() -> int:
+    try:
+        configured = int(os.environ.get("EASYSOURCEFLOW_DOCUMENT_IMPORT_MAX_BYTES", "52428800"))
+    except ValueError:
+        return 50 * 1024 * 1024
+    return max(1, min(configured, 200 * 1024 * 1024))
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _document_file_error(code: str, message: str, next_steps: list[str] | None = None) -> dict:
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "next_steps": next_steps or ["Upload the document again and retry."],
+        }
     }
 
 

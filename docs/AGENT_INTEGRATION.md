@@ -46,13 +46,17 @@ scripts/easysourceflow install-skill "$AGENT_WORKSPACE"
 
 Skill 规定所有单链接默认使用可恢复的异步流程、视频默认使用 Pro、最终 Markdown 原样交付、不得二次总结，以及用户回复“收藏”时收藏最近结果。飞书 `message` 工具的 `card` 参数必须传对象而不是 JSON 字符串；卡片发送失败时也只能回退为完整原始 Markdown，不能改成缩略总结。
 
+只发送一个支持的链接或 PDF、DOCX、EPUB、TXT、Markdown、HTML 附件而没有附加文字时，Skill 默认将其视为总结请求。重复发送也必须重新进入 EasySourceFlow，由缓存决定是否复用，Agent 不能自行回复“内容相同”。PDF 必须使用 `easysourceflow_submit_document_file` 提交原始附件；聊天系统内联的 PDF 文字可能只是前几页预览，不能作为完整正文。用户明确要求翻译、编辑等其他操作时，以明确要求为准。
+
 OpenClaw Agent 如果配置了 `agents.list[].skills` 白名单，还必须在目标 Agent 的现有列表中追加 `easysourceflow`，否则文件虽然已经复制，Skill 仍不会进入系统提示。先用 `openclaw config get agents.list --json` 找到目标 Agent，保留原有 Skill 后追加该名称，再运行：
 
 ```bash
 openclaw gateway restart
 ```
 
-可在一次 `openclaw agent --agent <agent-id> ... --json` 的 `systemPromptReport.skills.entries` 中确认已出现 `easysourceflow`。
+安装或更新 Skill 后，在目标 Agent 的聊天窗口中**单独发送 `/new`**，再提交链接或附件。OpenClaw 会为会话保留 Skill 快照；重启网关会保留会话状态，因此不能替代 `/new`。旧会话记录会归档，不会删除 Agent 配置或其他聊天。
+
+可在一次 `openclaw agent --agent <agent-id> ... --json` 的 `systemPromptReport.skills.entries` 中确认已出现 `easysourceflow`。如果 Agent 仍直接总结，先确认工具列表中存在 `easysourceflow_submit_document_file`，再确认已经在当前聊天执行 `/new`。
 
 正常提交保持 `force_refresh=false` 以复用仍有效的缓存。只有用户明确要求重新抓取、重新转写、重新生成或忽略旧结果时才传 `true`；任务重试默认强制刷新。
 
@@ -72,6 +76,8 @@ openclaw gateway restart
 
 1. 总结普通文章链接，并原样返回 Markdown。
 2. 总结视频链接，确认任务使用 Pro 且结果标出字幕来源。
-3. 在收到结果后回复“收藏”，确认只收藏当前结果且不重复发送全文。
+3. 只上传一个 PDF、不附加文字，确认 Agent 调用 `easysourceflow_submit_document_file` 而不是自行总结。
+4. 重复上传同一个 PDF，确认仍调用工具并由缓存复用结果，而不是回复“内容相同”。
+5. 在收到结果后回复“收藏”，确认只收藏当前结果且不重复发送全文。
 
 完整工具契约见 [MCP_API.md](MCP_API.md)。Skill 的测试场景位于 `skills/easysourceflow/evals/evals.json`。

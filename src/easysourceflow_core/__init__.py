@@ -4,6 +4,6 @@ import logging
 
 __all__ = ["__version__"]
 
-__version__ = "0.6.4"
+__version__ = "0.7.0"
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())

@@ -13,14 +13,14 @@ from easysourceflow_core.asr_quality import describe_transcript_quality, evaluat
 from easysourceflow_core.bilibili_regression import run_manifest
 from easysourceflow_core.config import DEFAULT_SUMMARY_PROMPT, Settings
 from easysourceflow_core.errors import EasySourceFlowError
-from easysourceflow_core.health import _check_deepseek
+from easysourceflow_core.health import _check_deepseek, _check_pdf_ocr
 from easysourceflow_core.models import SourceDocument, SummaryResult
 from easysourceflow_core.media_download import _download_command, _download_failure, _resolve_downloaded_file
 from easysourceflow_core.notifications import notify_event
 from easysourceflow_core.output import write_resource_package, write_summary_markdown
 from easysourceflow_core.service import EasySourceFlowService, _cache_context
 from easysourceflow_core.store import JobStore
-from easysourceflow_core.documents import document_payload_to_text
+from easysourceflow_core.documents import _pdf_to_text, document_payload_to_text
 from easysourceflow_core.web_ui import _markdown_page, _render_markdown, delete_favorite, favorite_output, list_favorites, list_outputs, render_index
 from easysourceflow_core.extractors.wechat import _extract_wechat_fields, _extract_image_urls
 from easysourceflow_core.extractors.video import (
@@ -894,6 +894,33 @@ class CoreTests(unittest.TestCase):
         )
         self.assertIn("EPUB body text", epub_text)
         self.assertEqual(epub_meta["input_kind"], "uploaded_epub")
+
+    def test_pdf_without_text_layer_uses_ocr_and_never_returns_empty_content(self):
+        empty_page = MagicMock()
+        empty_page.extract_text.return_value = ""
+        reader = MagicMock(pages=[empty_page, empty_page])
+        with patch("pypdf.PdfReader", return_value=reader), patch(
+            "easysourceflow_core.documents._macos_pdf_ocr",
+            return_value="[Page 1]\nOCR text\n\n[Page 2]\nMore OCR text",
+        ):
+            text = _pdf_to_text(b"pdf")
+        self.assertIn("[Page 2]", text)
+
+        with patch("pypdf.PdfReader", return_value=reader), patch(
+            "easysourceflow_core.documents._macos_pdf_ocr",
+            return_value="",
+        ):
+            with self.assertRaises(EasySourceFlowError) as context:
+                _pdf_to_text(b"pdf")
+        self.assertEqual(context.exception.code, "document_text_unavailable")
+
+    def test_pdf_ocr_health_reports_backend_without_becoming_required(self):
+        with patch("easysourceflow_core.health.sys.platform", "darwin"), patch(
+            "easysourceflow_core.health.shutil.which", return_value="/usr/bin/xcrun"
+        ), patch("pathlib.Path.is_file", return_value=True):
+            result = _check_pdf_ocr()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["required"])
 
     def test_deepseek_failure_is_visible_in_fallback_result(self):
         document = SourceDocument(

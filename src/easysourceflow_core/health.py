@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -23,6 +24,7 @@ def run_health_checks(settings: Settings) -> dict:
         _check_whisper(settings),
         _check_transcription_backend(settings),
         _check_document_parsers(),
+        _check_pdf_ocr(),
         _check_bilibili_cookies(settings),
         _check_youtube_cookies(settings),
         _check_wechat_extractor(),
@@ -255,6 +257,19 @@ def _check_document_parsers() -> dict:
             required=False,
             fix="Install pypdf in the active runtime, then restart EasySourceFlow.",
         )
+
+
+def _check_pdf_ocr() -> dict:
+    helper = Path(__file__).with_name("macos_pdf_ocr.swift")
+    if sys.platform == "darwin" and shutil.which("xcrun") and helper.is_file():
+        return _result("pdf_ocr", True, "macOS Vision OCR is available for image-only PDFs.", required=False)
+    return _result(
+        "pdf_ocr",
+        False,
+        "Image-only PDF OCR is unavailable; searchable PDFs still work.",
+        required=False,
+        fix="On macOS, install the Xcode Command Line Tools. On other systems, OCR the PDF before uploading it.",
+    )
 
 
 def _executable_version(name: str, path: str, args: list[str], required: bool, accepted_returncodes: set[int] | None = None) -> dict:

@@ -47,6 +47,44 @@
         "Corrects a card type validation error before retrying",
         "Falls back to the complete unchanged Markdown rather than a shorter summary"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "[media attached: report.pdf (application/pdf)]\n<file name=\"report.pdf\">This report explains a three-stage product strategy, its risks, and the recommended next actions.</file>",
+      "expected_output": "The bare PDF attachment is treated as an implicit summary request, submitted to EasySourceFlow as document content, polled to completion, and delivered unchanged.",
+      "files": [],
+      "expectations": [
+        "Triggers EasySourceFlow even though the user did not explicitly ask for a summary",
+        "Uses easysourceflow_submit_document_file with the attachment path even though preview text is present",
+        "Does not treat message-injected PDF preview text as the complete document",
+        "Does not use a PDF model or summarize the attachment directly",
+        "Polls easysourceflow_get_job until a terminal state",
+        "Returns the final result.summary_markdown unchanged"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "https://example.com/long-article",
+      "expected_output": "The bare article URL is treated as an implicit EasySourceFlow summary request and follows the durable link workflow.",
+      "files": [],
+      "expectations": [
+        "Triggers EasySourceFlow without requiring the word summarize",
+        "Uses easysourceflow_submit_link and retains the job ID",
+        "Polls easysourceflow_get_job until completion",
+        "Does not use an unrelated fetcher or the Agent's own summary"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[media attached: report.pdf (application/pdf)]\n<file name=\"report.pdf\">This is the same truncated preview shown in the previous turn.</file>",
+      "expected_output": "A repeated PDF remains an EasySourceFlow request and is submitted as the original file rather than answered with a duplicate-content message.",
+      "files": [],
+      "expectations": [
+        "Uses easysourceflow_submit_document_file again with force_refresh false",
+        "Allows EasySourceFlow cache handling to decide whether work is reused",
+        "Does not reply that the document is identical or ask the user to upload it again",
+        "Polls the returned job ID and delivers the final Markdown unchanged"
+      ]
     }
   ]
 }

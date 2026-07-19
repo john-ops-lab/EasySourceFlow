@@ -956,6 +956,8 @@ def _agent_status(settings: Settings) -> dict:
             "last_path": activity.get("last_path"),
         },
         "install_command": 'scripts/easysourceflow install-skill "$AGENT_WORKSPACE"',
+        "session_refresh_command": "/new",
+        "session_refresh_message": "安装或更新 Skill 后，在目标 Agent 聊天中单独发送 /new，以加载新的会话规则。",
     }
 
 

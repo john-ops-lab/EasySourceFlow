@@ -587,6 +587,8 @@ install_agent_skill() {
   rsync -a --delete "${ROOT_DIR}/skills/easysourceflow/" "${target}/"
   printf 'Installed EasySourceFlow skill: %s\n' "${target}"
   printf 'OpenClaw: if the target agent defines an agents.list[].skills allowlist, add "easysourceflow" and restart the gateway.\n'
+  printf 'OpenClaw: after every Skill install or update, send /new as a standalone message in the target Agent chat.\n'
+  printf 'Existing chats can retain an older Skill snapshot even after the gateway restarts.\n'
 }
 
 maintenance_run() {
