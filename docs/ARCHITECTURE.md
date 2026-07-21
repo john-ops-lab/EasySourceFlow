@@ -88,7 +88,7 @@ MCP 适配器，面向 Agent 暴露工具。它只负责：
 
 ### 3.6 Summarization engine
 
-总结器把提取文本、用户指令、来源元数据组合成模型输入。主路径使用 OpenAI-compatible Chat Completions；豆包按当前官方接口使用 Responses API。Web 预置 DeepSeek、OpenAI、通义千问、Kimi、智谱、MiniMax、Gemini、硅基流动、Ollama、LM Studio、xAI、豆包、百度千帆、腾讯混元和 OpenRouter。模型适配层只提取最终答案：MiniMax 请求独立返回推理内容，Chat Completions 的 `reasoning_content`、`reasoning_details`、`reasoning` 与 Responses API 的 reasoning 项均不进入结果；输出清洗还会拒绝未闭合的推理标签和提示词回显。云端服务缺少 API Key 时走本地抽取式摘要兜底；回环地址上的 Ollama 和 LM Studio 可在无 Key 时调用。
+总结器把提取文本、用户指令、来源元数据组合成模型输入。主路径使用 OpenAI-compatible Chat Completions；豆包按当前官方接口使用 Responses API。Web 预置 DeepSeek、OpenAI、通义千问、Kimi、智谱、MiniMax、Gemini、硅基流动、Ollama、LM Studio、xAI、豆包、百度千帆、腾讯混元和 OpenRouter。模型目录优先读取服务商的模型枚举接口，Gemini 和 Ollama 使用各自协议，其他兼容服务尝试 OpenAI Models API；结果缓存 24 小时，失败时回退缓存或内置清单，不自动切换 Fast/Pro。模型适配层只提取最终答案：MiniMax 请求独立返回推理内容，Chat Completions 的 `reasoning_content`、`reasoning_details`、`reasoning` 与 Responses API 的 reasoning 项均不进入结果；输出清洗还会拒绝未闭合的推理标签和提示词回显。已配置第二套模型时，主模型异常会按同一 Fast/Pro 档位调用备用模型一次，并把实际模型写入结果；两次均失败或没有可用备用时才走本地抽取式摘要。回环地址上的 Ollama 和 LM Studio 可在无 Key 时调用。
 
 ### 3.7 SQLite store
 

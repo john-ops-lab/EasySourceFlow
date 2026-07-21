@@ -85,6 +85,20 @@
         "Does not reply that the document is identical or ask the user to upload it again",
         "Polls the returned job ID and delivers the final Markdown unchanged"
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "https://example.feishu.cn/wiki/EXAMPLE_DOCUMENT_TOKEN",
+      "expected_output": "The bare Feishu Wiki link is read through the authenticated Feishu connector, submitted to EasySourceFlow as a cloud document with its original source URL, polled to completion, and delivered unchanged.",
+      "files": [],
+      "expectations": [
+        "Triggers EasySourceFlow even though the user did not explicitly ask for a summary",
+        "Uses the Feishu Wiki and document tools only to resolve and read the complete source body",
+        "Passes the complete connector content, title, and original Feishu URL to easysourceflow_submit_document",
+        "Does not summarize or deliver the Feishu connector output directly",
+        "Polls easysourceflow_get_job until a terminal state",
+        "Returns the final result.summary_markdown unchanged so the document appears in the EasySourceFlow result library"
+      ]
     }
   ]
 }

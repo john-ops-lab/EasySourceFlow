@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .model_services import ModelProfile, configured_model_profiles, model_service_for_config
 from .url_utils import DEFAULT_FAKE_IP_CIDRS, normalize_fake_ip_cidrs
 
 
@@ -86,6 +87,7 @@ class Settings:
     project_root: Path = Path()
     fake_ip_trust_enabled: bool = False
     fake_ip_cidrs: str = ",".join(DEFAULT_FAKE_IP_CIDRS)
+    model_fallbacks: tuple[ModelProfile, ...] = ()
 
     @property
     def base_url(self) -> str:
@@ -153,6 +155,13 @@ def load_settings() -> Settings:
         if saved_prompt:
             summary_prompt = saved_prompt
 
+    model_provider = _env("EASYSOURCEFLOW_MODEL_PROVIDER", "local")
+    model_base_url = os.environ.get("EASYSOURCEFLOW_MODEL_BASE_URL") or os.environ.get(
+        "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+    )
+    active_service = model_service_for_config(model_provider, model_base_url)
+    model_fallbacks = configured_model_profiles(os.environ, active_service["id"])
+
     return Settings(
         host=_env("EASYSOURCEFLOW_HOST", "127.0.0.1"),
         port=int(_env("EASYSOURCEFLOW_PORT", "8765")),
@@ -173,11 +182,11 @@ def load_settings() -> Settings:
         mlx_whisper_path=_env("EASYSOURCEFLOW_MLX_WHISPER_PATH", "mlx_whisper"),
         faster_whisper_path=_env("EASYSOURCEFLOW_FASTER_WHISPER_PATH", "faster-whisper"),
         max_transcription_seconds=int(_env("EASYSOURCEFLOW_MAX_TRANSCRIPTION_SECONDS", "7200")),
-        model_provider=_env("EASYSOURCEFLOW_MODEL_PROVIDER", "local"),
-        model=_env("EASYSOURCEFLOW_MODEL", "deepseek-v4-flash"),
-        strong_model=_env("EASYSOURCEFLOW_STRONG_MODEL", "deepseek-v4-pro"),
+        model_provider=model_provider,
+        model=_env("EASYSOURCEFLOW_MODEL", "deepseek-chat"),
+        strong_model=_env("EASYSOURCEFLOW_STRONG_MODEL", "deepseek-reasoner"),
         deepseek_api_key=os.environ.get("EASYSOURCEFLOW_MODEL_API_KEY") or os.environ.get("DEEPSEEK_API_KEY", ""),
-        deepseek_base_url=os.environ.get("EASYSOURCEFLOW_MODEL_BASE_URL") or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        deepseek_base_url=model_base_url,
         youtube_browser_cookie_source=_env("EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE", ""),
         cache_ttl_seconds=max(0, int(_env("EASYSOURCEFLOW_CACHE_TTL_SECONDS", "604800"))),
         notification_webhook_url=_env("EASYSOURCEFLOW_NOTIFICATION_WEBHOOK_URL", ""),
@@ -192,6 +201,7 @@ def load_settings() -> Settings:
         fake_ip_cidrs=",".join(
             normalize_fake_ip_cidrs(_env("EASYSOURCEFLOW_FAKE_IP_CIDRS", ",".join(DEFAULT_FAKE_IP_CIDRS)))
         ),
+        model_fallbacks=model_fallbacks,
     )
 
 

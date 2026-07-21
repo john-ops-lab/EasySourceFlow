@@ -2,11 +2,11 @@
 
 ## Content processing
 
-- `easysourceflow_submit_link`: default processing entry point for every URL. Inputs: `url`, optional `instruction`, optional `summary_quality` (`fast` or `pro`), and optional `force_refresh`. Retain the returned job ID.
+- `easysourceflow_submit_link`: default processing entry point for public content URLs. Authenticated cloud-document links are the exception: read them with their dedicated connector, then submit the complete body with `easysourceflow_submit_document`. Inputs: `url`, optional `instruction`, optional `summary_quality` (`fast` or `pro`), and optional `force_refresh`. Retain the returned job ID.
 - `easysourceflow_get_job`: query by `job_id`; pass `wait_seconds=45` and repeat while queued or running. A succeeded job contains the final Markdown and output paths.
 - `easysourceflow_summarize_link`: compatibility-only synchronous processing for short non-video webpages. It rejects Bilibili and YouTube links.
 - `easysourceflow_submit_document_file`: submit an uploaded PDF or other supported attachment by its platform-provided path. The MCP adapter only accepts files below configured upload roots and sends the original bytes to EasySourceFlow.
-- `easysourceflow_submit_document`: submit pasted text or a complete non-PDF document body, with optional `title`, `instruction`, `summary_quality`, and `force_refresh`; retain its job ID and poll `easysourceflow_get_job`. Never pass local paths or message-envelope metadata as content.
+- `easysourceflow_submit_document`: submit pasted text, a complete non-PDF document body, or complete content returned by an authenticated cloud-document connector. Inputs include optional `title`, original HTTPS `source_url`, `instruction`, `summary_quality`, and `force_refresh`; retain its job ID and poll `easysourceflow_get_job`. For Feishu Wiki links, resolve and read the document with the Feishu connector first, then submit its complete content. Never pass local paths or message-envelope metadata as content, and never summarize connector output directly.
 - `easysourceflow_submit_batch`: submit `urls` plus optional shared instruction, quality, and `force_refresh`. Follow with `easysourceflow_get_batch`.
 
 ## Result management

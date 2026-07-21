@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from .config import Settings
 from .cleanup import cleanup_artifacts
@@ -96,11 +97,20 @@ class EasySourceFlowService:
         summary_quality = _normalize_summary_quality(summary_quality)
         job_id = f"job_{uuid.uuid4().hex}"
         safe_title = (title or "local-document").strip()[:180] or "local-document"
-        doc_metadata = metadata or {"input_kind": "uploaded_text"}
+        doc_metadata = dict(metadata or {"input_kind": "uploaded_text"})
+        source_url, source_type, extraction_method = _document_source_info(doc_metadata, safe_title)
+        if source_type != "local_file":
+            doc_metadata.update(
+                {
+                    "source_url": source_url,
+                    "source_type": source_type,
+                    "extraction_method": extraction_method,
+                }
+            )
         request_payload = {"title": safe_title, "content": content, "metadata": doc_metadata}
         self.store.create_job(
             job_id,
-            f"local://{safe_title}",
+            source_url,
             instruction,
             request_kind="document",
             summary_quality=summary_quality,
@@ -126,6 +136,9 @@ class EasySourceFlowService:
 
     def submit_document_payload(self, payload: dict, run_async: bool = True) -> dict:
         title, content, metadata = document_payload_to_text(payload)
+        source_url = str(payload.get("source_url") or "").strip()
+        if source_url:
+            metadata = {**metadata, "source_url": source_url}
         instruction = str(payload.get("instruction", ""))
         summary_quality = str(payload.get("summary_quality") or "fast")
         return self.submit_text_document(
@@ -420,7 +433,11 @@ class EasySourceFlowService:
                 return
             if len(text) > self.settings.max_content_chars:
                 text = text[: self.settings.max_content_chars].rsplit("\n", 1)[0]
-            content_digest = hashlib.sha256(f"{title}\0{text}".encode("utf-8")).hexdigest()
+            source_url, source_type, extraction_method = _document_source_info(metadata, title)
+            digest_input = f"{title}\0{text}"
+            if source_type != "local_file":
+                digest_input += f"\0{source_type}\0{source_url}"
+            content_digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
             cache_canonical_url = f"local://document/{content_digest}"
             cache_context = _cache_context(self.settings, summary_quality)
             cached = None if force_refresh else self.store.get_cached_result(
@@ -431,15 +448,15 @@ class EasySourceFlowService:
                 max_age_seconds=self.settings.cache_ttl_seconds,
             )
             if cached:
-                self.store.mark_succeeded_from_cache(job_id, cached, canonical_url=f"local://{title}")
+                self.store.mark_succeeded_from_cache(job_id, cached, canonical_url=source_url)
                 completed = self.store.get_job(job_id)
                 if completed:
                     self._notify_job(completed)
                 return
             document = SourceDocument(
-                source_url=f"local://{title}",
-                canonical_url=f"local://{title}",
-                source_type="local_file",
+                source_url=source_url,
+                canonical_url=source_url,
+                source_type=source_type,
                 title=title,
                 author=None,
                 published_at=None,
@@ -447,7 +464,7 @@ class EasySourceFlowService:
                 content_text=text,
                 content_markdown=text,
                 metadata=metadata,
-                extraction_method="local_text_upload",
+                extraction_method=extraction_method,
             )
             if self.store.is_canceled(job_id):
                 logger.info("job stopped because it was canceled job_id=%s", job_id)
@@ -526,8 +543,18 @@ class EasySourceFlowService:
         metadata["summary_quality"] = summary_quality
         metadata["summary_model"] = summary_settings.model
         document = replace(document, metadata=metadata)
-        logger.info("job summarizing job_id=%s summary_quality=%s model=%s", job_id, summary_quality, summary_settings.model)
-        result = digest_with_provider(summary_settings, document, instruction)
+        fallback_settings = _fallback_summary_settings(self.settings, summary_quality)
+        logger.info(
+            "job summarizing job_id=%s summary_quality=%s model=%s fallback_model=%s",
+            job_id,
+            summary_quality,
+            summary_settings.model,
+            fallback_settings[0].model if fallback_settings else "",
+        )
+        if fallback_settings:
+            result = digest_with_provider(summary_settings, document, instruction, fallback_settings)
+        else:
+            result = digest_with_provider(summary_settings, document, instruction)
         if self.store.is_canceled(job_id):
             logger.info("job stopped after summarization because it was canceled job_id=%s", job_id)
             return
@@ -538,7 +565,8 @@ class EasySourceFlowService:
         result_payload = result.to_dict()
         result_payload["cache_hit"] = False
         result_payload["summary_quality"] = summary_quality
-        result_payload["summary_model"] = summary_settings.model
+        result_payload["summary_model"] = str(result.source.metadata.get("summary_model") or summary_settings.model)
+        result_payload["model_failover_used"] = bool(result.source.metadata.get("model_failover_used"))
         result_payload["output_markdown_path"] = str(output_path)
         if package_path:
             result_payload["resource_package_path"] = str(package_path)
@@ -622,6 +650,42 @@ class EasySourceFlowService:
         )
 
 
+def _document_source_info(metadata: dict, title: str) -> tuple[str, str, str]:
+    raw_url = str((metadata or {}).get("source_url") or "").strip()
+    if not raw_url:
+        return f"local://{title}", "local_file", "local_text_upload"
+    if len(raw_url) > 2048 or any(character.isspace() or ord(character) < 32 for character in raw_url):
+        raise EasySourceFlowError(
+            code="invalid_document_source",
+            message="The cloud document source URL is invalid.",
+            next_steps=["Provide the original HTTPS document link without spaces or control characters."],
+        )
+    parsed = urlsplit(raw_url)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise EasySourceFlowError(
+            code="invalid_document_source",
+            message="Cloud document sources must use a normal HTTPS URL.",
+            next_steps=["Provide the original HTTPS document link returned by the document connector."],
+        )
+    host = parsed.hostname.lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise EasySourceFlowError(
+            code="invalid_document_source",
+            message="The cloud document source URL has an invalid port.",
+            next_steps=["Provide the original HTTPS document link returned by the document connector."],
+        ) from exc
+    netloc = host
+    if port:
+        netloc = f"{host}:{port}"
+    source_url = urlunsplit(("https", netloc, parsed.path or "/", parsed.query, parsed.fragment))
+    is_feishu = host == "feishu.cn" or host.endswith(".feishu.cn") or host == "larksuite.com" or host.endswith(".larksuite.com")
+    if is_feishu:
+        return source_url, "feishu_document", "agent_feishu_connector"
+    return source_url, "cloud_document", "agent_document_connector"
+
+
 def _require_job(job: Optional[dict], job_id: str) -> dict:
     if job is None:
         logger.error("job disappeared after creation job_id=%s", job_id)
@@ -639,14 +703,41 @@ def _summary_settings(settings: Settings, summary_quality: str) -> Settings:
     return settings
 
 
+def _fallback_summary_settings(settings: Settings, summary_quality: str) -> tuple[Settings, ...]:
+    use_strong_model = _normalize_summary_quality(summary_quality) == "pro"
+    candidates = []
+    for profile in settings.model_fallbacks[:1]:
+        candidates.append(
+            replace(
+                settings,
+                model_provider=profile.provider,
+                model=profile.strong_model if use_strong_model else profile.model,
+                strong_model=profile.strong_model,
+                deepseek_api_key=profile.api_key,
+                deepseek_base_url=profile.base_url,
+                model_fallbacks=(),
+            )
+        )
+    return tuple(candidates)
+
+
 def _cache_context(settings: Settings, summary_quality: str) -> str:
     summary_settings = _summary_settings(settings, summary_quality)
+    fallback_settings = _fallback_summary_settings(settings, summary_quality)
     payload = {
         "provider": summary_settings.model_provider,
         "model": summary_settings.model,
         "base_url": summary_settings.model_base_url.rstrip("/"),
         "summary_prompt": hashlib.sha256(summary_settings.summary_prompt.encode("utf-8")).hexdigest()[:16],
         "summary_pipeline": SUMMARY_PIPELINE_VERSION,
+        "fallback_models": [
+            {
+                "provider": candidate.model_provider,
+                "model": candidate.model,
+                "base_url": candidate.model_base_url.rstrip("/"),
+            }
+            for candidate in fallback_settings
+        ],
     }
     encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:20]

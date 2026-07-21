@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import replace
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -41,22 +41,77 @@ _TIMELINE_LINK_PLACEHOLDER = "{{EASYSOURCEFLOW_TIMELINE_LINK}}"
 _CORE_TIMELINE_LIMIT = 12
 
 
-def digest_with_provider(settings: Settings, document: SourceDocument, instruction: str = "") -> SummaryResult:
-    provider = settings.model_provider.lower()
-    if provider in {"deepseek", "openai_compatible"} and _model_api_ready(settings):
+def digest_with_provider(
+    settings: Settings,
+    document: SourceDocument,
+    instruction: str = "",
+    fallback_settings: Sequence[Settings] = (),
+) -> SummaryResult:
+    if settings.model_provider.lower() == "local":
+        return digest_document(document, instruction)
+
+    failures: list[tuple[Settings, str]] = []
+    candidates = [settings, *list(fallback_settings[:1])]
+    for index, candidate in enumerate(candidates):
+        provider = candidate.model_provider.lower()
+        if provider not in {"deepseek", "openai_compatible"} or not _model_api_ready(candidate):
+            failures.append((candidate, "Model API credentials or local endpoint are not available."))
+            continue
         try:
-            return digest_with_model(settings, document, instruction)
+            result = digest_with_model(candidate, document, instruction)
+            if index:
+                return _mark_model_failover(result, settings, candidate, failures[0][1])
+            return result
         except Exception as exc:
             reason = _summarize_llm_error(exc)
+            failures.append((candidate, reason))
             logger.warning(
-                "model summary failed; falling back to extractive summary provider=%s source_type=%s error_type=%s reason=%s",
+                "model summary failed provider=%s model=%s attempt=%s source_type=%s error_type=%s reason=%s",
                 provider,
+                candidate.model,
+                index + 1,
                 document.source_type,
                 type(exc).__name__,
                 reason,
             )
-            return digest_document(document, instruction, fallback_reason=reason)
-    return digest_document(document, instruction)
+    fallback_reason = "; ".join(f"{candidate.model}: {reason}" for candidate, reason in failures)
+    logger.warning(
+        "all configured model attempts failed; falling back to extractive summary attempts=%s source_type=%s",
+        len(failures),
+        document.source_type,
+    )
+    return digest_document(document, instruction, fallback_reason=fallback_reason)
+
+
+def _mark_model_failover(
+    result: SummaryResult,
+    primary: Settings,
+    fallback: Settings,
+    primary_failure_reason: str,
+) -> SummaryResult:
+    metadata = dict(result.source.metadata or {})
+    metadata.update(
+        {
+            "summary_provider": fallback.model_provider,
+            "summary_model": fallback.model,
+            "model_failover_used": True,
+            "model_failover_from": primary.model,
+            "model_failover_reason": primary_failure_reason,
+        }
+    )
+    source = replace(result.source, metadata=metadata)
+    model_line = f"- Model: {fallback.model}\n"
+    failover_line = f"- Automatic fallback: {primary.model} failed; switched to {fallback.model}.\n"
+    markdown = result.summary_markdown
+    if model_line in markdown and failover_line not in markdown:
+        markdown = markdown.replace(model_line, model_line + failover_line, 1)
+    logger.info(
+        "model failover succeeded primary_model=%s fallback_model=%s source_type=%s",
+        primary.model,
+        fallback.model,
+        source.source_type,
+    )
+    return replace(result, summary_markdown=markdown, source=source)
 
 
 def digest_with_model(settings: Settings, document: SourceDocument, instruction: str = "") -> SummaryResult:
@@ -211,6 +266,7 @@ def digest_document(document: SourceDocument, instruction: str = "", fallback_re
     if fallback_reason:
         metadata = dict(document.metadata or {})
         metadata["summary_provider"] = "local_extractive_fallback"
+        metadata["summary_model"] = "local_extractive_fallback"
         metadata["llm_fallback_reason"] = fallback_reason
         document = replace(document, metadata=metadata)
     sentences = _split_sentences(document.content_text)

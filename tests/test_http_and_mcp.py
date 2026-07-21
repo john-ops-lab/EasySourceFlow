@@ -319,8 +319,8 @@ class HttpAndMcpTests(unittest.TestCase):
                 faster_whisper_path="faster-whisper",
                 max_transcription_seconds=7200,
                 model_provider="local",
-                model="deepseek-v4-flash",
-                strong_model="deepseek-v4-pro",
+                model="deepseek-chat",
+                strong_model="deepseek-reasoner",
                 deepseek_api_key="",
                 deepseek_base_url="https://api.deepseek.com",
             )
@@ -416,17 +416,12 @@ class HttpAndMcpTests(unittest.TestCase):
                         method="POST",
                     )
                     with patch(
-                        "easysourceflow_core.http_api.run_health_checks",
+                        "easysourceflow_core.http_api.run_model_check",
                         return_value={
                             "ok": True,
-                            "checks": [
-                                {
-                                    "name": "deepseek_api",
-                                    "ok": True,
-                                    "required": True,
-                                    "message": "Model API is reachable.",
-                                }
-                            ],
+                            "name": "deepseek_api",
+                            "required": True,
+                            "message": "Model API is reachable.",
                         },
                     ) as health_check:
                         with urlopen(draft_test_request, timeout=10) as response:
@@ -443,8 +438,8 @@ class HttpAndMcpTests(unittest.TestCase):
                         data=json.dumps(
                             {
                                 "service_id": "minimax",
-                                "model": "deepseek-v4-flash",
-                                "strong_model": "deepseek-v4-pro",
+                                "model": "deepseek-chat",
+                                "strong_model": "deepseek-reasoner",
                             }
                         ).encode("utf-8"),
                         headers={"content-type": "application/json"},
@@ -459,8 +454,8 @@ class HttpAndMcpTests(unittest.TestCase):
                     model_payload = json.dumps(
                         {
                             "provider": "openai_compatible",
-                            "model": "deepseek-v4-pro",
-                            "strong_model": "deepseek-v4-pro",
+                            "model": "deepseek-reasoner",
+                            "strong_model": "deepseek-reasoner",
                             "model_base_url": "https://api.deepseek.com",
                             "model_api_key": "test-model-api-key",
                         }
@@ -477,7 +472,7 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertEqual(model["model"]["provider"], "openai_compatible")
                     config_text = config_file.read_text(encoding="utf-8")
                     self.assertIn("EASYSOURCEFLOW_MODEL_PROVIDER=openai_compatible", config_text)
-                    self.assertIn("EASYSOURCEFLOW_MODEL=deepseek-v4-pro", config_text)
+                    self.assertIn("EASYSOURCEFLOW_MODEL=deepseek-reasoner", config_text)
                     self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY=test-model-api-key", config_text)
                     self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY_DEEPSEEK=test-model-api-key", config_text)
                     self.assertIn("DEEPSEEK_API_KEY=test-model-api-key", config_text)
@@ -497,11 +492,45 @@ class HttpAndMcpTests(unittest.TestCase):
                         credential = json.loads(response.read().decode("utf-8"))
                     self.assertTrue(credential["model"]["credential_status"]["minimax"])
                     self.assertEqual(credential["model"]["active_service_id"], "deepseek")
+                    self.assertEqual(credential["model"]["fallback_service_id"], "minimax")
+                    self.assertEqual(credential["model"]["fallback_model"], "MiniMax-M2.7-highspeed")
+                    self.assertEqual(len(settings.model_fallbacks), 1)
+                    self.assertEqual(settings.model_fallbacks[0].service_id, "minimax")
                     self.assertNotIn("test-minimax-api-key", json.dumps(credential, ensure_ascii=False))
                     self.assertIn(
                         "EASYSOURCEFLOW_MODEL_API_KEY_MINIMAX=test-minimax-api-key",
                         config_file.read_text(encoding="utf-8"),
                     )
+
+                    catalog_request = Request(
+                        f"http://127.0.0.1:{api_server.server_port}/model/catalog",
+                        data=json.dumps(
+                            {"service_id": "minimax", "force_refresh": True}
+                        ).encode("utf-8"),
+                        headers={"content-type": "application/json"},
+                        method="POST",
+                    )
+                    with patch(
+                        "easysourceflow_core.http_api.model_catalog",
+                        return_value={
+                            "ok": True,
+                            "service_id": "minimax",
+                            "status": "live",
+                            "models": [{"id": "MiniMax-M3", "source": "provider"}],
+                            "model_ids": ["MiniMax-M3"],
+                            "additional_model_ids": [],
+                            "message": "updated",
+                            "refreshed_at": 1,
+                        },
+                    ) as catalog_discovery:
+                        with urlopen(catalog_request, timeout=10) as response:
+                            catalog = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(catalog["model_ids"], ["MiniMax-M3"])
+                    self.assertEqual(
+                        catalog_discovery.call_args.args[1],
+                        "test-minimax-api-key",
+                    )
+                    self.assertNotIn("test-minimax-api-key", json.dumps(catalog))
 
                     delete_credential_request = Request(
                         f"http://127.0.0.1:{api_server.server_port}/model/credentials/delete",
@@ -513,6 +542,8 @@ class HttpAndMcpTests(unittest.TestCase):
                         deleted_credential = json.loads(response.read().decode("utf-8"))
                     self.assertFalse(deleted_credential["model"]["credential_status"]["minimax"])
                     self.assertEqual(deleted_credential["model"]["active_service_id"], "deepseek")
+                    self.assertEqual(deleted_credential["model"]["fallback_service_id"], "")
+                    self.assertEqual(settings.model_fallbacks, ())
 
                     switch_payload = json.dumps(
                         {
@@ -541,8 +572,8 @@ class HttpAndMcpTests(unittest.TestCase):
                         {
                             "service_id": "deepseek",
                             "provider": "openai_compatible",
-                            "model": "deepseek-v4-pro",
-                            "strong_model": "deepseek-v4-pro",
+                            "model": "deepseek-reasoner",
+                            "strong_model": "deepseek-reasoner",
                             "model_base_url": "https://api.deepseek.com",
                         }
                     ).encode("utf-8")
@@ -561,8 +592,8 @@ class HttpAndMcpTests(unittest.TestCase):
                         {
                             "service_id": "deepseek",
                             "provider": "openai_compatible",
-                            "model": "deepseek-v4-pro",
-                            "strong_model": "deepseek-v4-pro",
+                            "model": "deepseek-reasoner",
+                            "strong_model": "deepseek-reasoner",
                             "model_base_url": "https://api.deepseek.com",
                             "clear_model_api_key": True,
                         }
@@ -822,8 +853,8 @@ class HttpAndMcpTests(unittest.TestCase):
                     faster_whisper_path="faster-whisper",
                     max_transcription_seconds=7200,
                     model_provider="local",
-                    model="deepseek-v4-flash",
-                    strong_model="deepseek-v4-pro",
+                    model="deepseek-chat",
+                    strong_model="deepseek-reasoner",
                     deepseek_api_key="",
                     deepseek_base_url="https://api.deepseek.com",
                 )
@@ -1051,6 +1082,25 @@ class HttpAndMcpTests(unittest.TestCase):
             proc.stdin.close()
             proc.stdout.close()
             proc.stderr.close()
+
+    def test_mcp_connector_document_forwards_original_source_url(self):
+        source_url = "https://example.feishu.cn/wiki/EXAMPLE_DOCUMENT_TOKEN"
+        with patch(
+            "easysourceflow_mcp.server._post_json",
+            return_value={"job_id": "job_cloud_document", "status": "queued"},
+        ) as post_json:
+            result = call_tool(
+                "easysourceflow_submit_document",
+                {
+                    "title": "飞书云文档",
+                    "content": "这是飞书连接器返回的完整正文内容。",
+                    "source_url": source_url,
+                },
+            )
+
+        self.assertFalse(result["isError"])
+        self.assertEqual(post_json.call_args.args[0], "/documents")
+        self.assertEqual(post_json.call_args.args[1]["source_url"], source_url)
 
     def test_mcp_document_file_only_reads_configured_upload_roots(self):
         with tempfile.TemporaryDirectory() as tmp:

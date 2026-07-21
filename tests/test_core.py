@@ -13,12 +13,13 @@ from easysourceflow_core.asr_quality import describe_transcript_quality, evaluat
 from easysourceflow_core.bilibili_regression import run_manifest
 from easysourceflow_core.config import DEFAULT_SUMMARY_PROMPT, Settings
 from easysourceflow_core.errors import EasySourceFlowError
-from easysourceflow_core.health import _check_deepseek, _check_pdf_ocr
+from easysourceflow_core.health import _check_deepseek, _check_pdf_ocr, run_health_checks
 from easysourceflow_core.models import SourceDocument, SummaryResult
 from easysourceflow_core.media_download import _download_command, _download_failure, _resolve_downloaded_file
+from easysourceflow_core.model_services import ModelProfile
 from easysourceflow_core.notifications import notify_event
 from easysourceflow_core.output import write_resource_package, write_summary_markdown
-from easysourceflow_core.service import EasySourceFlowService, _cache_context
+from easysourceflow_core.service import EasySourceFlowService, _cache_context, _fallback_summary_settings
 from easysourceflow_core.store import JobStore
 from easysourceflow_core.documents import _pdf_to_text, document_payload_to_text
 from easysourceflow_core.web_ui import _markdown_page, _render_markdown, delete_favorite, favorite_output, list_favorites, list_outputs, render_index
@@ -59,6 +60,28 @@ class CoreTests(unittest.TestCase):
             object.__setattr__(settings, "summary_prompt", "请优先解释因果关系，并使用简洁中文。")
             customized = _cache_context(settings, "fast")
             self.assertNotEqual(original, customized)
+
+    def test_backup_model_matches_fast_and_pro_quality_and_changes_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            original_context = _cache_context(settings, "fast")
+            profile = ModelProfile(
+                service_id="minimax",
+                label="MiniMax",
+                provider="openai_compatible",
+                model="backup-fast",
+                strong_model="backup-pro",
+                base_url="https://backup.example/v1",
+                api_key="EXAMPLE_BACKUP_KEY",
+            )
+            settings = Settings(**{**settings.__dict__, "model_fallbacks": (profile,)})
+
+            fast = _fallback_summary_settings(settings, "fast")
+            pro = _fallback_summary_settings(settings, "pro")
+
+        self.assertEqual(fast[0].model, "backup-fast")
+        self.assertEqual(pro[0].model, "backup-pro")
+        self.assertNotEqual(original_context, _cache_context(settings, "fast"))
 
     def test_custom_summary_prompt_is_sent_with_fixed_safety_rules(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,6 +433,8 @@ class CoreTests(unittest.TestCase):
         self.assertIn("postJsonWithProgress", page)
         self.assertIn('id="retry-instruction"', page)
         self.assertIn("openResourcePackage", page)
+        self.assertIn("总结模型：", page)
+        self.assertIn("自动备用", page)
         self.assertIn('id="summary-prompt"', page)
         self.assertIn('id="youtube-import-button"', page)
         self.assertIn('data-maintenance-tab="agent-maintenance"', page)
@@ -424,6 +449,10 @@ class CoreTests(unittest.TestCase):
         self.assertIn('id="fake-ip-trust-enabled"', page)
         self.assertIn("/network/security", page)
         self.assertIn("window.open(new URL('#results'", page)
+        self.assertIn("const HEALTH_REFRESH_MS = 60000", page)
+        self.assertIn("document.addEventListener('visibilitychange'", page)
+        self.assertIn("return activeCount > 0 ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS", page)
+        self.assertNotIn("setInterval(refreshAll, 2000)", page)
 
     def test_media_download_command_uses_controlled_video_options(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -554,8 +583,8 @@ class CoreTests(unittest.TestCase):
                 faster_whisper_path="faster-whisper",
                 max_transcription_seconds=7200,
                 model_provider="local",
-                model="deepseek-v4-flash",
-                strong_model="deepseek-v4-pro",
+                model="deepseek-chat",
+                strong_model="deepseek-reasoner",
                 deepseek_api_key="",
                 deepseek_base_url="https://api.deepseek.com",
             )
@@ -588,8 +617,8 @@ class CoreTests(unittest.TestCase):
                 faster_whisper_path="faster-whisper",
                 max_transcription_seconds=7200,
                 model_provider="local",
-                model="deepseek-v4-flash",
-                strong_model="deepseek-v4-pro",
+                model="deepseek-chat",
+                strong_model="deepseek-reasoner",
                 deepseek_api_key="",
                 deepseek_base_url="https://api.deepseek.com",
             )
@@ -686,6 +715,45 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(seen_models, ["pro-model"])
             self.assertEqual(job["result"]["summary_quality"], "pro")
             self.assertEqual(job["result"]["summary_model"], "pro-model")
+
+    def test_connector_document_preserves_feishu_source_and_rejects_invalid_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(tmp)
+            service = EasySourceFlowService(settings)
+
+            def fake_digest(call_settings, document, instruction):
+                return SummaryResult(
+                    title=document.title,
+                    summary_markdown="# Feishu Doc\n\n## 一句话结论\n\n测试。",
+                    tags=[],
+                    suggested_note_path="Inbox/Links/feishu.md",
+                    save_recommendation={"should_save": True, "reason": "test"},
+                    source=document,
+                )
+
+            source_url = "https://example.feishu.cn/wiki/EXAMPLE_DOCUMENT_TOKEN"
+            with patch("easysourceflow_core.service.digest_with_provider", side_effect=fake_digest):
+                job = service.submit_text_document(
+                    title="飞书云文档",
+                    content="这是一份由飞书连接器完整读取的文档正文，用于验证来源链接和结果库分类。",
+                    metadata={"input_kind": "connector_text", "source_url": source_url},
+                )
+
+            self.assertEqual(job["status"], "succeeded")
+            self.assertEqual(job["url"], source_url)
+            self.assertEqual(job["result"]["source"]["source_url"], source_url)
+            self.assertEqual(job["result"]["source"]["source_type"], "feishu_document")
+            self.assertEqual(job["result"]["source"]["extraction_method"], "agent_feishu_connector")
+            self.assertEqual(Path(job["result"]["output_markdown_path"]).parent.name, "feishu-document")
+
+            with self.assertRaises(EasySourceFlowError) as context:
+                service.submit_text_document(
+                    title="不安全来源",
+                    content="这是一段足够长的正文，但来源不是允许保存的 HTTPS 云文档链接。",
+                    metadata={"source_url": "http://internal.example/document"},
+                )
+            self.assertEqual(context.exception.code, "invalid_document_source")
+            service.executor.shutdown(wait=True)
 
     def test_cache_changes_with_model_and_force_refresh(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -949,6 +1017,128 @@ class CoreTests(unittest.TestCase):
             result = digest_with_provider(settings, document, "")
         self.assertIn("local_extractive_fallback", result.summary_markdown)
         self.assertIn("llm_fallback_reason", result.source.metadata)
+        self.assertIn("model/local_fallback", result.tags)
+
+    def test_model_failure_retries_one_configured_backup(self):
+        document = SourceDocument(
+            source_url="https://example.com/failover",
+            canonical_url="https://example.com/failover",
+            source_type="web",
+            title="Failover Test",
+            author=None,
+            published_at=None,
+            language="zh",
+            content_text="这是一段足够长的正文，用于验证主模型失败后会自动改用备用模型。",
+            content_markdown="",
+            metadata={"summary_model": "primary-model"},
+            extraction_method="test",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            primary = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "primary-model",
+                    "deepseek_api_key": "EXAMPLE_PRIMARY_KEY",
+                    "deepseek_base_url": "https://primary.example/v1",
+                }
+            )
+            backup = Settings(
+                **{
+                    **primary.__dict__,
+                    "model": "backup-model",
+                    "deepseek_api_key": "EXAMPLE_BACKUP_KEY",
+                    "deepseek_base_url": "https://backup.example/v1",
+                }
+            )
+            backup_result = SummaryResult(
+                title=document.title,
+                summary_markdown=(
+                    "# Failover Test\n\n## 一句话结论\n\n备用成功。\n\n"
+                    "## Model\n\n- Provider: OpenAI-compatible\n- Model: backup-model\n- Extraction: test"
+                ),
+                tags=["summary"],
+                suggested_note_path="Inbox/Links/failover.md",
+                save_recommendation={"should_save": True, "reason": "test"},
+                source=document,
+            )
+
+            def model_attempt(candidate, source, instruction):
+                if candidate.model == "primary-model":
+                    raise RuntimeError("primary unavailable")
+                return backup_result
+
+            with patch("easysourceflow_core.digest.digest_with_model", side_effect=model_attempt) as attempted:
+                result = digest_with_provider(primary, document, fallback_settings=(backup,))
+
+        self.assertEqual([call.args[0].model for call in attempted.call_args_list], ["primary-model", "backup-model"])
+        self.assertTrue(result.source.metadata["model_failover_used"])
+        self.assertEqual(result.source.metadata["model_failover_from"], "primary-model")
+        self.assertEqual(result.source.metadata["summary_model"], "backup-model")
+        self.assertIn("Automatic fallback: primary-model failed; switched to backup-model", result.summary_markdown)
+
+    def test_model_success_does_not_call_configured_backup(self):
+        document = SourceDocument(
+            source_url="https://example.com/primary",
+            canonical_url="https://example.com/primary",
+            source_type="web",
+            title="Primary Test",
+            author=None,
+            published_at=None,
+            language="zh",
+            content_text="主模型正常时不应调用备用模型。",
+            content_markdown="",
+            metadata={},
+            extraction_method="test",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            primary = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "primary-model",
+                    "deepseek_api_key": "EXAMPLE_PRIMARY_KEY",
+                }
+            )
+            backup = Settings(**{**primary.__dict__, "model": "backup-model"})
+            primary_result = digest_document(document)
+            with patch("easysourceflow_core.digest.digest_with_model", return_value=primary_result) as attempted:
+                result = digest_with_provider(primary, document, fallback_settings=(backup,))
+
+        self.assertEqual(attempted.call_count, 1)
+        self.assertIs(result, primary_result)
+
+    def test_two_model_failures_use_local_fallback_after_both_attempts(self):
+        document = SourceDocument(
+            source_url="https://example.com/all-failed",
+            canonical_url="https://example.com/all-failed",
+            source_type="web",
+            title="All Failed",
+            author=None,
+            published_at=None,
+            language="zh",
+            content_text="第一句。第二句。第三句。第四句。第五句。第六句。",
+            content_markdown="",
+            metadata={"summary_model": "primary-model"},
+            extraction_method="test",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            primary = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "primary-model",
+                    "deepseek_api_key": "EXAMPLE_PRIMARY_KEY",
+                }
+            )
+            backup = Settings(**{**primary.__dict__, "model": "backup-model"})
+            with patch("easysourceflow_core.digest.digest_with_model", side_effect=RuntimeError("unavailable")) as attempted:
+                result = digest_with_provider(primary, document, fallback_settings=(backup,))
+
+        self.assertEqual(attempted.call_count, 2)
+        self.assertEqual(result.source.metadata["summary_model"], "local_extractive_fallback")
+        self.assertIn("primary-model", result.source.metadata["llm_fallback_reason"])
+        self.assertIn("backup-model", result.source.metadata["llm_fallback_reason"])
         self.assertIn("model/local_fallback", result.tags)
 
     def test_summary_prompt_uses_video_template(self):
@@ -1694,8 +1884,8 @@ class CoreTests(unittest.TestCase):
                 faster_whisper_path="faster-whisper",
                 max_transcription_seconds=7200,
                 model_provider="local",
-                model="deepseek-v4-flash",
-                strong_model="deepseek-v4-pro",
+                model="deepseek-chat",
+                strong_model="deepseek-reasoner",
                 deepseek_api_key="",
                 deepseek_base_url="https://api.deepseek.com",
             )
@@ -1764,6 +1954,25 @@ class CoreTests(unittest.TestCase):
                 result = _check_deepseek(settings)
         self.assertFalse(result["ok"])
         self.assertIn("invalid api key", result["message"])
+
+    def test_automatic_health_checks_never_call_model_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                **{
+                    **_settings(tmp).__dict__,
+                    "model_provider": "openai_compatible",
+                    "model": "MiniMax-M3",
+                    "deepseek_api_key": "test-key",
+                    "deepseek_base_url": "https://api.minimaxi.com/v1",
+                }
+            )
+            with patch("easysourceflow_core.health.urlopen") as model_request:
+                result = run_health_checks(settings)
+
+        model_request.assert_not_called()
+        model_config = next(item for item in result["checks"] if item["name"] == "model_config")
+        self.assertTrue(model_config["ok"])
+        self.assertIn("explicit request", model_config["message"])
 
     def test_deepseek_health_disables_thinking_for_short_probe(self):
         class FakeResponse:
@@ -1950,8 +2159,8 @@ def _settings(tmp):
         faster_whisper_path="faster-whisper",
         max_transcription_seconds=7200,
         model_provider="local",
-        model="deepseek-v4-flash",
-        strong_model="deepseek-v4-pro",
+        model="deepseek-chat",
+        strong_model="deepseek-reasoner",
         deepseek_api_key="",
         deepseek_base_url="https://api.deepseek.com",
     )

@@ -66,8 +66,8 @@ def run_regression() -> dict:
                 faster_whisper_path="faster-whisper",
                 max_transcription_seconds=7200,
                 model_provider="local",
-                model="deepseek-v4-flash",
-                strong_model="deepseek-v4-pro",
+                model="deepseek-chat",
+                strong_model="deepseek-reasoner",
                 deepseek_api_key="",
                 deepseek_base_url="https://api.deepseek.com",
             )

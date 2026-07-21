@@ -134,12 +134,16 @@ TOOLS = [
     },
     {
         "name": "easysourceflow_submit_document",
-        "description": "Submit local text or Markdown content for summarization without letting the service read arbitrary disk paths.",
+        "description": (
+            "Submit pasted text, Markdown, or complete content read by an authenticated document connector. "
+            "For cloud documents, include the original source_url so EasySourceFlow preserves provenance and writes the result to the correct library source."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Document title or filename."},
                 "content": {"type": "string", "description": "Plain text or Markdown content."},
+                "source_url": {"type": "string", "description": "Original HTTPS URL for connector-read cloud documents, such as a Feishu Docs or Wiki link."},
                 "instruction": {"type": "string", "description": "User summary instruction.", "default": ""},
                 "summary_quality": {"type": "string", "enum": ["fast", "pro"], "description": "Use fast for the configured normal model, or pro for the configured strong model. Video links are automatically treated as pro.", "default": "fast"},
                 "force_refresh": {"type": "boolean", "description": "Ignore cached results.", "default": False},
@@ -395,6 +399,7 @@ def call_tool(name: Any, arguments: Dict[str, Any]) -> dict:
                 {
                     "title": arguments.get("title", "local-document"),
                     "content": arguments.get("content", ""),
+                    "source_url": arguments.get("source_url", ""),
                     "instruction": arguments.get("instruction", ""),
                     "summary_quality": arguments.get("summary_quality", "fast"),
                     "force_refresh": arguments.get("force_refresh", False),

@@ -108,8 +108,8 @@ EASYSOURCEFLOW_WHISPER_CLI_PATH=whisper-cli
 EASYSOURCEFLOW_WHISPER_MODEL_PATH=~/.local/share/easysourceflow/models/ggml-base.bin
 EASYSOURCEFLOW_TRANSCRIPTION_BACKEND=whisper_cpp
 EASYSOURCEFLOW_MODEL_PROVIDER=openai_compatible
-EASYSOURCEFLOW_MODEL=deepseek-v4-flash
-EASYSOURCEFLOW_STRONG_MODEL=deepseek-v4-pro
+EASYSOURCEFLOW_MODEL=deepseek-chat
+EASYSOURCEFLOW_STRONG_MODEL=deepseek-reasoner
 EASYSOURCEFLOW_MODEL_BASE_URL=https://api.deepseek.com
 EASYSOURCEFLOW_MODEL_API_KEY=...
 ```
@@ -178,7 +178,7 @@ scripts/easysourceflow uninstall-launchd
 
 从 v0.2.x 升级时，`sync-runtime` 会检测旧 Python 3.9 虚拟环境并使用当前 Python 3.10+ 重建。重建后运行 `scripts/easysourceflow install-launchd`，让 plist 同步新的解释器和 site-packages 路径。
 
-`sync-runtime` 会刷新项目源码和 `.env` 中的配置，同时保留只存在于 launchd `runtime.env` 中、由本地 Web 控制台写入的配置项，例如 YouTube Chrome 实时登录态来源。
+`sync-runtime` 会刷新项目源码和 `.env` 中的配置，同时保留 launchd `runtime.env` 中由本地 Web 控制台写入的模型、API Key、Fake-IP 信任和平台登录配置。这样更新运行副本不会把 Web 中已经验证并保存的当前模型覆盖回项目根目录的旧值。
 
 ## 8. MCP 配置
 
@@ -257,12 +257,14 @@ scripts/easysourceflow backup
 健康检查应确认：
 
 - 输出目录可写。
-- 配置的模型 API 可访问。
+- 模型名称、API 地址和凭证已配置。
 - `yt-dlp` 可用。
 - `ffmpeg` 可用。
 - Whisper CLI 和模型可用。
 - B 站 cookies 文件存在。
 - Playwright 和 Chrome 可用。
+
+健康检查不会调用外部模型。需要验证模型真实连通性时，在 Web“维护 → 模型”中手动点击“测试模型”；每次测试会产生一次模型请求。
 
 Web 控制台应能打开：
 

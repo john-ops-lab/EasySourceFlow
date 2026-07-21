@@ -51,6 +51,18 @@ class RepositorySecurityTests(unittest.TestCase):
         self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY=\n", example)
         self.assertNotIn("REPLACE_WITH_MODEL_API_KEY", example)
 
+    def test_runtime_sync_preserves_web_managed_model_settings(self):
+        script = (ROOT / "scripts" / "easysourceflow").read_text(encoding="utf-8")
+
+        for key in (
+            "EASYSOURCEFLOW_MODEL_PROVIDER",
+            "EASYSOURCEFLOW_MODEL_FALLBACK_SERVICE",
+            "EASYSOURCEFLOW_TRUST_FAKE_IP",
+        ):
+            self.assertIn(f'key == "{key}"', script)
+        self.assertIn("EASYSOURCEFLOW_MODEL_API_KEY_[A-Z0-9_]+", script)
+        self.assertIn("EASYSOURCEFLOW_MODEL_(CONFIGURED|FAST|PRO|BASE_URL)_[A-Z0-9_]+", script)
+
     def test_security_scan_uses_generic_workspace_pattern(self):
         policy = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         self.assertIn("workspace-[A-Za-z0-9_-]+", policy)

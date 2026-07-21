@@ -1140,7 +1140,7 @@ INDEX_HTML = """<!doctype html>
     .model-field input:focus, .model-field select:focus { border-color: #9f9f9f; box-shadow: 0 0 0 3px rgba(0,0,0,.05); }
     .model-service-note { display: grid; gap: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .model-service-note strong { color: var(--ink); font-size: 13px; }
-    .model-primary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .model-primary-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .model-primary-actions button { min-height: 48px; }
     .configured-models { padding-top: 30px; }
     .configured-models-heading { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 14px; }
@@ -1156,6 +1156,8 @@ INDEX_HTML = """<!doctype html>
     .credential-title-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
     .credential-current { display: inline-flex; gap: 5px; align-items: center; color: #16834b; font-size: 12px; white-space: nowrap; }
     .credential-current::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #20b96b; }
+    .credential-fallback { display: inline-flex; gap: 5px; align-items: center; color: #9a5b00; font-size: 12px; white-space: nowrap; }
+    .credential-fallback::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #f2a900; }
     .credential-item .meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
     .credential-delete { width: 34px; height: 34px; padding: 0; border: 0; background: transparent; color: var(--muted); }
     .credential-delete:hover { background: #fff0f0; color: var(--red); }
@@ -1555,6 +1557,7 @@ INDEX_HTML = """<!doctype html>
             <input id="config-api-key" type="password" autocomplete="new-password" placeholder="请输入 API Key；已保存时可以留空">
           </div>
           <div class="model-primary-actions">
+            <button class="secondary" id="model-refresh-button" type="button">刷新模型列表</button>
             <button class="secondary" id="settings-model-test-button" type="button">测试连接</button>
             <button id="model-save-button" type="button">设为当前模型</button>
           </div>
@@ -1562,6 +1565,7 @@ INDEX_HTML = """<!doctype html>
             <strong id="model-service-pill">checking</strong>
             <span id="model-service-help">选择服务商后会自动使用对应接口地址。</span>
             <span id="model-key-status">API Key 状态读取中</span>
+            <span id="model-catalog-status">模型列表尚未同步</span>
           </div>
           <div class="unsaved-notice" id="model-unsaved-notice">当前选择尚未应用。</div>
           <div class="status-line" id="settings-model-status" role="status" aria-live="polite"></div>
@@ -1690,7 +1694,11 @@ INDEX_HTML = """<!doctype html>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <script>
-    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, credentialDirty: false, promptDirty: false, networkSecurityDirty: false, prompt: null, agent: null, networkSecurity: null, model: null, modelServices: [], health: null, runtimeStatus: null, readinessTarget: 'system-maintenance', initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
+    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, credentialDirty: false, promptDirty: false, networkSecurityDirty: false, prompt: null, agent: null, networkSecurity: null, model: null, modelServices: [], modelCatalogs: {}, modelCatalogLoading: new Set(), health: null, healthLoadedAt: 0, runtimeStatus: null, readinessTarget: 'system-maintenance', initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
+    const ACTIVE_REFRESH_MS = 2000;
+    const IDLE_REFRESH_MS = 10000;
+    const HEALTH_REFRESH_MS = 60000;
+    let refreshTimer = null;
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -2110,6 +2118,7 @@ INDEX_HTML = """<!doctype html>
       const runtime = data.runtime || {};
       const checks = runtime.checks || [];
       state.health = runtime;
+      state.healthLoadedAt = Date.now();
       $('health-pill').textContent = `${runtime.ok ? '正常' : '需处理'} · v${data.version || '-'}`;
       $('health').innerHTML = checks.map((check) => `
         <div class="check ${check.ok ? 'ok' : 'bad'}">
@@ -2136,7 +2145,7 @@ INDEX_HTML = """<!doctype html>
       let level = 'ready';
       let label = '已就绪';
       let target = 'system-maintenance';
-      if (keyMissing || requiredFailure?.name === 'deepseek_api') {
+      if (keyMissing || requiredFailure?.name === 'model_config') {
         level = 'blocked';
         label = keyMissing ? '模型 API Key 待配置' : '模型连接需处理';
         target = 'model-maintenance';
@@ -2197,11 +2206,15 @@ INDEX_HTML = """<!doctype html>
       renderFavoriteSources(data.source_counts || {});
     }
 
+    function sourceTypeLabel(value) {
+      return ({ 'feishu-document': '飞书文档', 'cloud-document': '云文档' })[value] || value;
+    }
+
     function renderOutputSources(counts) {
       const select = $('output-source');
       const current = select.value;
       const options = ['<option value="">全部来源</option>'].concat(Object.entries(counts).map(([name, count]) => (
-        `<option value="${esc(name)}">${esc(name)} (${count})</option>`
+        `<option value="${esc(name)}">${esc(sourceTypeLabel(name))} (${count})</option>`
       )));
       select.innerHTML = options.join('');
       select.value = current;
@@ -2215,7 +2228,7 @@ INDEX_HTML = """<!doctype html>
       const select = $('favorite-source');
       const current = select.value;
       const options = ['<option value="">全部来源</option>'].concat(Object.entries(counts).map(([name, count]) => (
-        `<option value="${esc(name)}">${esc(name)} (${count})</option>`
+        `<option value="${esc(name)}">${esc(sourceTypeLabel(name))} (${count})</option>`
       )));
       select.innerHTML = options.join('');
       select.value = current;
@@ -2235,7 +2248,7 @@ INDEX_HTML = """<!doctype html>
         <div class="row result-row">
           <div class="row-head">
             <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${esc(item.title)}</a>
-            <span class="status">${esc(item.source_type)}</span>
+            <span class="status">${esc(sourceTypeLabel(item.source_type))}</span>
           </div>
           <div class="meta">${esc(item.date)} · 更新于 ${esc(item.updated_at)} · ${Math.ceil(item.size / 1024)} KB</div>
           <details class="path-detail"><summary>文件信息</summary><div class="meta">${esc(item.relative_path)}</div></details>
@@ -2259,7 +2272,7 @@ INDEX_HTML = """<!doctype html>
         <div class="row">
           <div class="row-head">
             <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${esc(item.title)}</a>
-            <span class="status">${esc(item.source_type)}</span>
+            <span class="status">${esc(sourceTypeLabel(item.source_type))}</span>
           </div>
           <div class="meta">${esc(item.date)} · 更新于 ${esc(item.updated_at)} · ${Math.ceil(item.size / 1024)} KB</div>
           <div class="mini-actions">
@@ -2371,7 +2384,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function jobSourceLabel(job) {
-      if (job.request_kind === 'document') return '本地文件';
+      if (job.request_kind === 'document') {
+        const sourceType = job.result?.source?.source_type || job.request_payload?.metadata?.source_type || '';
+        if (sourceType === 'feishu_document') return '飞书文档';
+        if (sourceType === 'cloud_document') return '云文档';
+        return '本地文件';
+      }
       const url = String(job.url || '');
       if (/bilibili[.]com|b23[.]tv/i.test(url)) return 'Bilibili';
       if (/youtube[.]com|youtu[.]be/i.test(url)) return 'YouTube';
@@ -2398,11 +2416,14 @@ INDEX_HTML = """<!doctype html>
       const cancel = ['queued', 'running'].includes(job.status) ? `<button class="link-button" type="button" onclick="cancelJob('${esc(job.job_id)}')">取消</button>` : '';
       const packageButton = result.resource_package_path ? `<button class="link-button" type="button" onclick="openResourcePackage('${esc(job.job_id)}')">打开资源包</button>` : '';
       const retryQuality = job.summary_quality || result.summary_quality || 'fast';
+      const summaryModel = result.summary_model || result.source?.metadata?.summary_model || '';
+      const failoverUsed = result.model_failover_used || result.source?.metadata?.model_failover_used;
       $('job-detail').innerHTML = `
         <h3>${esc(job.title || job.url)}</h3>
         <div class="meta">${esc(job.status)} · ${esc(job.stage)} · ${Math.round((job.progress || 0) * 100)}%</div>
         <div class="meta">${esc(job.job_id)}</div>
         <div class="meta">${esc(job.url)}</div>
+        ${summaryModel ? `<div class="meta">总结模型：${esc(summaryModel)}${failoverUsed ? ' · 自动备用' : ''}</div>` : ''}
         ${transcript ? `<div class="meta">${transcript}</div>` : ''}
         ${job.error_message ? `<div class="meta">${esc(job.error_code)} · ${esc(job.error_message)}</div>` : ''}
         ${steps ? `<ol class="steps">${steps}</ol>` : ''}
@@ -2762,7 +2783,10 @@ INDEX_HTML = """<!doctype html>
 
     function renderSettingsPanel(cookies, youtubeCookies, model) {
       state.model = model;
-      state.modelServices = model.model_services || [];
+      state.modelServices = (model.model_services || []).map((service) => {
+        const catalog = state.modelCatalogs[service.id];
+        return catalog ? { ...service, models: catalog.model_ids || service.models } : service;
+      });
       $('bilibili-status-pill').textContent = cookies.ok ? '可用' : '需处理';
       $('bilibili-status-pill').className = `status ${cookies.ok ? 'succeeded' : 'failed'}`;
       $('bilibili-open-login-button').textContent = cookies.ok ? '重新扫码接入' : '扫码登录并自动接入';
@@ -2800,6 +2824,7 @@ INDEX_HTML = """<!doctype html>
       renderCredentialStatus(selectedModelService());
       renderCredentialList();
       updateModelDraftState();
+      if (!state.modelCatalogs[service.id]) refreshModelCatalog(false, service.id);
     }
 
     function renderLoginImportStatus(platform, cookies) {
@@ -2831,7 +2856,7 @@ INDEX_HTML = """<!doctype html>
         if (active) return active;
       }
       if (model.provider === 'local') {
-        return services.find((service) => service.id === 'local') || { id: 'local', label: '本地兜底', provider: 'local', base_url: '', models: ['local_extractive_fallback'] };
+        return services.find((service) => service.id === 'local') || { id: 'local', label: '本地基础摘要（非大模型）', provider: 'local', base_url: '', models: ['local_extractive_fallback'] };
       }
       return services.find((service) => service.base_url === (model.model_base_url || model.deepseek_base_url))
         || services.find((service) => service.id === 'deepseek')
@@ -2853,7 +2878,7 @@ INDEX_HTML = """<!doctype html>
 
     function modelOwnedByOtherService(service, name) {
       return Boolean(name && (state.modelServices || []).some((candidate) => (
-        candidate.id !== service.id && (candidate.models || []).includes(name)
+        candidate.id !== service.id && [...(candidate.models || []), ...(candidate.legacy_models || [])].includes(name)
       )));
     }
 
@@ -2869,7 +2894,14 @@ INDEX_HTML = """<!doctype html>
       if (activeService.id === service.id) [model.model, model.strong_model].forEach((name) => {
         if (name && !modelOwnedByOtherService(service, name) && !names.includes(name)) names.push(name);
       });
-      const options = names.map((name) => `<option value="${esc(name)}"></option>`).join('');
+      const catalog = state.modelCatalogs[service.id] || {};
+      const discovered = new Set((catalog.models || []).filter((item) => item.source === 'provider').map((item) => item.id));
+      const additionallyDiscovered = new Set(catalog.additional_model_ids || []);
+      const options = names.map((name) => {
+        let label = service.provider === 'local' || service.requires_api_key === false ? '本机已安装或预置' : '预置参考，需 API Key';
+        if (catalog.status !== 'key_required' && discovered.has(name)) label = additionallyDiscovered.has(name) ? '服务商补充' : '服务商可用';
+        return `<option value="${esc(name)}" label="${label}"></option>`;
+      }).join('');
       $('model-name-options').innerHTML = options;
       $('strong-model-name-options').innerHTML = options;
       const serviceDefault = names.includes(service.default_model) ? service.default_model : names[0];
@@ -2896,6 +2928,48 @@ INDEX_HTML = """<!doctype html>
       state.credentialDirty = false;
       markModelDirty();
       renderCredentialStatus(service);
+      refreshModelCatalog(false, service.id);
+    }
+
+    async function refreshModelCatalog(forceRefresh = true, requestedServiceId = '') {
+      const service = (state.modelServices || []).find((item) => item.id === requestedServiceId) || selectedModelService();
+      if (!service || state.modelCatalogLoading.has(service.id)) return;
+      state.modelCatalogLoading.add(service.id);
+      $('model-refresh-button').disabled = true;
+      if (selectedModelService().id === service.id) $('model-catalog-status').textContent = '正在读取服务商模型列表';
+      try {
+        const result = await postJson('/model/catalog', {
+          service_id: service.id,
+          model_api_key: $('config-api-key').value.trim(),
+          force_refresh: forceRefresh
+        });
+        state.modelCatalogs[service.id] = result;
+        const serviceIndex = state.modelServices.findIndex((item) => item.id === service.id);
+        if (serviceIndex >= 0) {
+          state.modelServices[serviceIndex] = {
+            ...state.modelServices[serviceIndex],
+            models: result.model_ids || state.modelServices[serviceIndex].models
+          };
+        }
+        if (selectedModelService().id === service.id) {
+          renderModelChoiceOptions(state.modelServices[serviceIndex] || service, state.model || {}, true);
+          const count = (result.model_ids || []).length;
+          const additionalCount = (result.additional_model_ids || []).length;
+          const extra = additionalCount ? `，发现 ${additionalCount} 个内置清单之外的模型` : '';
+          $('model-catalog-status').textContent = result.status === 'key_required'
+            ? result.message
+            : `${result.message} 当前显示 ${count} 个模型${extra}`;
+          if (forceRefresh) toast(result.status === 'fallback' ? result.message : '模型列表已刷新', result.status === 'fallback' ? 'error' : 'info');
+        }
+      } catch (error) {
+        if (selectedModelService().id === service.id) {
+          $('model-catalog-status').textContent = `模型列表刷新失败：${error.message}；仍可手工输入模型 ID。`;
+          if (forceRefresh) toast(`模型列表刷新失败：${error.message}`, 'error');
+        }
+      } finally {
+        state.modelCatalogLoading.delete(service.id);
+        $('model-refresh-button').disabled = false;
+      }
     }
 
     function renderCredentialStatus(service) {
@@ -2904,7 +2978,7 @@ INDEX_HTML = """<!doctype html>
       const keyOptional = service.requires_api_key === false;
       $('model-service-pill').textContent = service.label;
       $('model-service-help').textContent = isFallback
-        ? '本地兜底不调用外部模型。'
+        ? '本地基础摘要不调用大模型，仅在模型不可用时生成简单结果。'
         : keyOptional
           ? `本机兼容接口：${service.base_url}。模型 ID 可直接输入。`
         : `官方兼容接口：${service.base_url}`;
@@ -2922,16 +2996,27 @@ INDEX_HTML = """<!doctype html>
         service.id !== 'local' && state.model?.credential_status?.[service.id]
       ));
       const activeService = currentModelService(state.model || {});
+      const fallbackServiceId = state.model?.fallback_service_id || '';
       $('configured-model-count').textContent = `${configured.length} 个配置`;
-      $('model-credential-list').innerHTML = configured.map((service) => `
+      $('model-credential-list').innerHTML = configured.map((service) => {
+        const isActive = service.id === activeService.id;
+        const isFallback = service.id === fallbackServiceId;
+        const fastModel = isActive
+          ? modelForService(service, state.model.model, service.default_model)
+          : isFallback ? state.model.fallback_model : service.default_model;
+        const proModel = isActive
+          ? modelForService(service, state.model.strong_model, service.strong_model)
+          : isFallback ? state.model.fallback_strong_model : service.strong_model;
+        return `
         <div class="credential-item">
           <button class="credential-select" type="button" data-use-credential="${esc(service.id)}">
             <span class="credential-chevron" aria-hidden="true">›</span>
-            <span><span class="credential-title-line"><strong>${esc(service.label)}</strong>${service.id === activeService.id ? '<span class="credential-current">当前使用</span>' : ''}</span><span class="meta">API Key 已安全保存 · Fast ${esc(service.id === activeService.id ? modelForService(service, state.model.model, service.default_model) : service.default_model)} · Pro ${esc(service.id === activeService.id ? modelForService(service, state.model.strong_model, service.strong_model) : service.strong_model)}</span></span>
+            <span><span class="credential-title-line"><strong>${esc(service.label)}</strong>${isActive ? '<span class="credential-current">当前使用</span>' : ''}${isFallback ? '<span class="credential-fallback">自动备用</span>' : ''}</span><span class="meta">${service.requires_api_key === false ? '本机接口已配置' : 'API Key 已安全保存'} · Fast ${esc(fastModel)} · Pro ${esc(proModel)}</span></span>
           </button>
           <button class="credential-delete" type="button" title="删除 API Key" aria-label="删除 ${esc(service.label)} API Key" data-delete-credential="${esc(service.id)}">×</button>
         </div>
-      `).join('') || '<div class="empty">尚未配置模型。请在上方选择服务商并填写 API Key。</div>';
+      `;
+      }).join('') || '<div class="empty">尚未配置模型。请在上方选择服务商并填写 API Key。</div>';
       $('model-credential-list').querySelectorAll('[data-use-credential]').forEach((button) => {
         button.addEventListener('click', () => {
           selectModelService(button.dataset.useCredential);
@@ -3011,8 +3096,14 @@ INDEX_HTML = """<!doctype html>
         return false;
       }
       $('model-save-button').disabled = true;
-      setModelStatus('正在保存并验证模型');
+      setModelStatus('正在验证所选模型');
       try {
+        const testPassed = await testModel();
+        if (!testPassed) {
+          setModelStatus('所选模型未通过测试，当前模型没有改变。');
+          return false;
+        }
+        setModelStatus('验证通过，正在设为当前模型');
         if (apiKey) {
           const credential = await postJson('/model/credentials', {
             service_id: service.id,
@@ -3034,7 +3125,8 @@ INDEX_HTML = """<!doctype html>
         updateModelDraftState();
         toast(`已启用 ${service.label} · ${result.model.model}`);
         await Promise.allSettled([loadRuntimeStatus(), loadHealth()]);
-        return testModel();
+        setModelStatus(`已启用 ${service.label} · Fast ${result.model.model} · Pro ${result.model.strong_model}`);
+        return true;
       } catch (error) {
         setModelStatus(`保存失败：${error.message}`);
         toast(`保存失败：${error.message}`, 'error');
@@ -3158,7 +3250,7 @@ INDEX_HTML = """<!doctype html>
           <div class="row">
             <div class="row-head">
               <a class="title" href="${esc(item.view_url)}" target="_blank" rel="noreferrer">${highlightText(item.title, query)}</a>
-              <span class="status">${esc(item.source_type)}</span>
+              <span class="status">${esc(sourceTypeLabel(item.source_type))}</span>
             </div>
             <div class="meta">${esc(item.date)} · ${Math.ceil(item.size / 1024)} KB</div>
             <div class="meta">${highlightText(cleanMarkdownSnippet(item.snippet), query)}</div>
@@ -3195,27 +3287,50 @@ INDEX_HTML = """<!doctype html>
     async function refreshAll(manual = false) {
       if (state.refreshing) return;
       state.refreshing = true;
-      const activePanel = document.querySelector('.workspace-page.active')?.id || 'submit-panel';
-      const tasks = [loadJobs()];
-      if (!state.initialized || activePanel === 'outputs-panel') tasks.push(loadOutputs());
-      if (!state.initialized || activePanel === 'favorites-panel') tasks.push(loadFavorites());
-      if (!state.initialized || activePanel === 'submit-panel') tasks.push(loadBatches());
-      if (!state.initialized || activePanel === 'download-panel') tasks.push(loadDownloads());
-      if (!state.initialized || activePanel === 'maintenance-panel') {
-        tasks.push(loadHealth(), loadRuntimeStatus(), loadMaintenanceStatus(), loadPromptSettings(), loadAgentStatus(), loadNetworkSecurity());
+      try {
+        const activePanel = document.querySelector('.workspace-page.active')?.id || 'submit-panel';
+        const tasks = [loadJobs()];
+        if (!state.initialized || activePanel === 'outputs-panel') tasks.push(loadOutputs());
+        if (!state.initialized || activePanel === 'favorites-panel') tasks.push(loadFavorites());
+        if (!state.initialized || activePanel === 'submit-panel') tasks.push(loadBatches());
+        if (!state.initialized || activePanel === 'download-panel') tasks.push(loadDownloads());
+        if (!state.initialized || activePanel === 'maintenance-panel') {
+          const healthDue = manual || !state.healthLoadedAt || Date.now() - state.healthLoadedAt >= HEALTH_REFRESH_MS;
+          if (healthDue) tasks.push(loadHealth());
+          tasks.push(loadRuntimeStatus(), loadMaintenanceStatus(), loadPromptSettings(), loadAgentStatus(), loadNetworkSecurity());
+        }
+        const results = await Promise.allSettled(tasks);
+        const failed = results.filter((result) => result.status === 'rejected');
+        if (failed.length) {
+          $('readiness-button').className = 'service-state blocked';
+          $('service-dot').className = 'service-dot bad';
+          $('service-label').textContent = '部分数据刷新失败';
+          if (manual) toast('部分数据刷新失败，请检查服务状态', 'error');
+        } else if (manual) {
+          toast('数据已刷新');
+        }
+        state.initialized = true;
+      } finally {
+        state.refreshing = false;
       }
-      const results = await Promise.allSettled(tasks);
-      const failed = results.filter((result) => result.status === 'rejected');
-      if (failed.length) {
-        $('readiness-button').className = 'service-state blocked';
-        $('service-dot').className = 'service-dot bad';
-        $('service-label').textContent = '部分数据刷新失败';
-        if (manual) toast('部分数据刷新失败，请检查服务状态', 'error');
-      } else if (manual) {
-        toast('数据已刷新');
-      }
-      state.initialized = true;
-      state.refreshing = false;
+    }
+
+    function refreshDelay() {
+      const activeCount = Number(state.queue?.active_count || 0);
+      return activeCount > 0 ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS;
+    }
+
+    function scheduleRefresh() {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = null;
+      if (document.hidden) return;
+      refreshTimer = setTimeout(async () => {
+        try {
+          await refreshAll();
+        } finally {
+          scheduleRefresh();
+        }
+      }, refreshDelay());
     }
 
     mergePanels();
@@ -3236,6 +3351,7 @@ INDEX_HTML = """<!doctype html>
       $('file-hint').textContent = file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : '支持 txt、md、字幕、HTML、DOCX、EPUB、PDF。文件内容在浏览器读取后提交给本机服务。';
     });
     $('settings-model-test-button').addEventListener('click', testModel);
+    $('model-refresh-button').addEventListener('click', () => refreshModelCatalog(true));
     $('model-save-button').addEventListener('click', saveModelChoice);
     $('readiness-button').addEventListener('click', openReadinessTarget);
     $('bilibili-open-login-button').addEventListener('click', openBilibiliLogin);
@@ -3334,6 +3450,14 @@ INDEX_HTML = """<!doctype html>
       $('file-input').dispatchEvent(new Event('change'));
     });
     window.addEventListener('hashchange', restoreRoute);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = null;
+        return;
+      }
+      refreshAll().finally(scheduleRefresh);
+    });
     window.showJob = showJob;
     window.retryJob = retryJob;
     window.openResourcePackage = openResourcePackage;
@@ -3348,8 +3472,7 @@ INDEX_HTML = """<!doctype html>
     updateDownloadFormats();
     setInterval(tickClock, 1000);
     restoreRoute();
-    refreshAll();
-    setInterval(refreshAll, 2000);
+    refreshAll().finally(scheduleRefresh);
   </script>
 </body>
 </html>

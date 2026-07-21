@@ -1,10 +1,10 @@
 ---
 name: easysourceflow
-description: Use EasySourceFlow whenever the user provides a webpage, WeChat article, Bilibili video, YouTube link, or supported document. A bare supported link or attachment with no written request means "summarize this with EasySourceFlow" by default; trigger this skill even when the user does not say summarize. Also use it for notes, transcription, previous results, subtitle source, local ASR, search, or favorites. Do not trigger only when the user explicitly requests a different operation such as translation or editing.
+description: Use EasySourceFlow whenever the user provides a webpage, WeChat article, Bilibili video, YouTube link, Feishu Docs or Wiki link, other connector-readable cloud document, or supported file. A bare supported link or attachment with no written request means "summarize this with EasySourceFlow" by default; trigger this skill even when the user does not say summarize. Also use it for notes, transcription, previous results, subtitle source, local ASR, search, or favorites. Do not trigger only when the user explicitly requests a different operation such as translation or editing.
 compatibility: Requires a running EasySourceFlow service and its MCP tools.
 license: MIT
 metadata:
-  version: "0.1.3"
+  version: "0.1.4"
 ---
 
 # EasySourceFlow
@@ -13,13 +13,16 @@ Use EasySourceFlow as the single content-processing pipeline. Do not reproduce i
 
 ## Choose the workflow
 
-- Treat a message containing only a supported URL or a PDF, DOCX, EPUB, TXT, Markdown, or HTML attachment as an implicit EasySourceFlow summary request. An explicit user instruction takes precedence.
-- For every single URL, including webpages, WeChat articles, Bilibili, and YouTube, call `easysourceflow_submit_link` and retain its `job_id`.
+- Treat a message containing only a supported URL, Feishu cloud document link, or a PDF, DOCX, EPUB, TXT, Markdown, or HTML attachment as an implicit EasySourceFlow summary request. An explicit user instruction takes precedence.
+- For a Feishu Docs or Wiki link, use the authenticated Feishu connector to resolve the Wiki node when necessary and read the complete document body. Then call `easysourceflow_submit_document` with the connector's complete `content`, document `title`, and the user's original link as `source_url`; retain the returned `job_id`. Never summarize or deliver the connector output directly.
+- For another authenticated cloud-document link that EasySourceFlow cannot fetch directly, use its dedicated connector to read the complete body, then pass the title, content, and original HTTPS `source_url` to `easysourceflow_submit_document` in the same way.
+- If a cloud-document connector cannot return the complete body, report the connector access or completeness failure. Do not ask EasySourceFlow to fetch a private link, and do not use the Agent's own model as a fallback summary.
+- For every other single URL, including public webpages, WeChat articles, Bilibili, and YouTube, call `easysourceflow_submit_link` and retain its `job_id`.
 - Call `easysourceflow_get_job` with that `job_id` and `wait_seconds=45`. If it remains queued or running, call the same tool again until it reaches a terminal state.
 - Treat `easysourceflow_summarize_link` as a compatibility tool for short non-video webpages only. Do not choose it for new Agent workflows.
 - For multiple links, call `easysourceflow_submit_batch`, then poll `easysourceflow_get_batch`.
 - For an uploaded PDF, call `easysourceflow_submit_document_file` with the attachment path and original filename. Message-injected PDF text may be a truncated preview and must not be treated as the complete document.
-- For pasted text or a non-PDF attachment whose complete body is already present, call `easysourceflow_submit_document` after excluding transport metadata, local paths, wrapper tags, and untrusted-content markers. Use the original filename as `title`.
+- For pasted text, connector-read cloud content, or a non-PDF attachment whose complete body is already present, call `easysourceflow_submit_document` after excluding transport metadata, local paths, wrapper tags, and untrusted-content markers. Use the original filename or connector title as `title`; connector-read cloud content must also include its original `source_url`.
 - If the file submission tool is unavailable, report that the EasySourceFlow integration must be updated. Do not use a PDF model, document reader, inline preview, or the Agent's own model as a fallback summary.
 - A repeated link or attachment is still an EasySourceFlow request. Submit it normally with `force_refresh=false` so the service can reuse a valid cached result; never replace the tool call with a duplicate-content response.
 - Poll document jobs with `easysourceflow_get_job` exactly like URL jobs.

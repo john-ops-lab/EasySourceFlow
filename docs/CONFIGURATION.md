@@ -43,17 +43,18 @@ EASYSOURCEFLOW_FAKE_IP_CIDRS=198.18.0.0/15
 | Variable | Default | Description |
 | --- | --- | --- |
 | `EASYSOURCEFLOW_MODEL_PROVIDER` | `local` | `local` or `openai_compatible`. |
-| `EASYSOURCEFLOW_MODEL` | `deepseek-v4-flash` | Default model for fast summaries. |
-| `EASYSOURCEFLOW_STRONG_MODEL` | `deepseek-v4-pro` | Strong model for video/pro summaries. |
+| `EASYSOURCEFLOW_MODEL` | `deepseek-chat` | Default model for fast summaries. |
+| `EASYSOURCEFLOW_STRONG_MODEL` | `deepseek-reasoner` | Strong model for video/pro summaries. |
 | `EASYSOURCEFLOW_MODEL_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible API base URL. |
 | `EASYSOURCEFLOW_MODEL_API_KEY` | empty | API key. Required for cloud model summaries; optional for loopback Ollama/LM Studio endpoints. |
 | `EASYSOURCEFLOW_MODEL_API_KEY_<SERVICE_ID>` | empty | Web-managed credential for one provider, such as `..._DEEPSEEK` or `..._OPENAI`. Values are never returned by the API. |
+| `EASYSOURCEFLOW_MODEL_FALLBACK_SERVICE` | empty | Web-managed service ID for one automatic backup model. Normally do not edit this value manually. |
 | `EASYSOURCEFLOW_SUMMARY_PROMPT_FILE` | `$DATA_DIR/config/summary-prompt.txt` | Multiline hard rules and Markdown template shared by every configured cloud model. |
 | `EASYSOURCEFLOW_SUMMARY_PROMPT` | built-in prompt | Optional one-line fallback when the prompt file does not exist. |
 | `EASYSOURCEFLOW_SUMMARY_SYSTEM_PROMPT` | empty | Deprecated compatibility alias for `EASYSOURCEFLOW_SUMMARY_PROMPT`. |
 | `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY` | empty | Backward-compatible aliases. Prefer `EASYSOURCEFLOW_MODEL_*`. |
 
-The Web console stores credentials separately for each preset provider. The generic `EASYSOURCEFLOW_MODEL_API_KEY` value always represents the active provider, so switching providers cannot silently reuse another provider's key. Preset model IDs are suggestions: the Fast and Pro fields also accept a model ID supported by the selected service.
+The Web console stores credentials separately for each preset provider. The generic `EASYSOURCEFLOW_MODEL_API_KEY` value always represents the active provider, so switching providers cannot silently reuse another provider's key. If at least two model services are configured, the first non-active configuration is marked as the automatic backup. A failed primary call is retried once with the backup service, using its Fast or Pro model to match the task; only when both attempts fail does EasySourceFlow use the local extractive fallback. After a key is configured, the Web console asks the provider for the models available to that account and caches the result under `$DATA_DIR/cache/model-catalog.json` for 24 hours. Provider discovery is best effort: a failed refresh keeps the previous cache or built-in fallback, and the Fast and Pro fields continue to accept a model ID manually. A newly discovered model is never activated automatically.
 
 The Web prompt is model-independent: every configured cloud or local generative model receives the same rules and Markdown template. EasySourceFlow appends source metadata, source-specific requirements, and content at runtime. The local extractive fallback does not call a model and therefore does not use this prompt. Changing the prompt invalidates the summary cache for new jobs.
 

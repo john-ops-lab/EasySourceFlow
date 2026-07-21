@@ -31,8 +31,20 @@ from .config import (
 )
 from .backup import backup_artifacts
 from .errors import EasySourceFlowError
-from .health import run_health_checks
+from .health import run_model_check
 from .maintenance import maintenance_status
+from .model_catalog import model_catalog
+from .model_services import (
+    MODEL_FALLBACK_SERVICE_KEY,
+    MODEL_SERVICES as _MODEL_SERVICES,
+    MODEL_SERVICE_KEY_NAMES as _MODEL_SERVICE_KEY_NAMES,
+    configured_model_profiles,
+    model_profile_enabled_env_values,
+    model_profile_env_values,
+    model_service_by_id,
+    model_service_for_config,
+    model_service_is_configured,
+)
 from .service import EasySourceFlowService
 from .url_utils import DEFAULT_FAKE_IP_CIDRS, normalize_fake_ip_cidrs
 from .web_ui import delete_favorite, favorite_output, list_favorites, list_outputs, render_index, render_output
@@ -46,163 +58,6 @@ _BILIBILI_AUTH_COOKIE_NAMES = {"SESSDATA", "bili_jct", "DedeUserID"}
 _YOUTUBE_AUTH_COOKIE_NAMES = {"LOGIN_INFO", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}
 _LOGIN_AUTO_IMPORT_TIMEOUT_SECONDS = 300
 _LOGIN_AUTO_IMPORT_RETRY_SECONDS = (3, 5, 8, 12, 15)
-
-_MODEL_SERVICES = [
-    {
-        "id": "local",
-        "label": "本地兜底",
-        "provider": "local",
-        "base_url": "",
-        "models": ["local_extractive_fallback"],
-        "default_model": "local_extractive_fallback",
-        "strong_model": "local_extractive_fallback",
-    },
-    {
-        "id": "deepseek",
-        "label": "DeepSeek",
-        "provider": "openai_compatible",
-        "base_url": "https://api.deepseek.com",
-        "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
-        "default_model": "deepseek-v4-flash",
-        "strong_model": "deepseek-v4-pro",
-    },
-    {
-        "id": "openai",
-        "label": "OpenAI",
-        "provider": "openai_compatible",
-        "base_url": "https://api.openai.com/v1",
-        "models": ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"],
-        "default_model": "gpt-4.1-mini",
-        "strong_model": "gpt-4.1",
-    },
-    {
-        "id": "qwen",
-        "label": "通义千问",
-        "provider": "openai_compatible",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
-        "default_model": "qwen-plus",
-        "strong_model": "qwen-max",
-    },
-    {
-        "id": "kimi",
-        "label": "Kimi / Moonshot",
-        "provider": "openai_compatible",
-        "base_url": "https://api.moonshot.cn/v1",
-        "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-k2-0711-preview"],
-        "default_model": "moonshot-v1-8k",
-        "strong_model": "kimi-k2-0711-preview",
-    },
-    {
-        "id": "zhipu",
-        "label": "智谱 GLM",
-        "provider": "openai_compatible",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "models": ["glm-4-plus", "glm-4-air", "glm-4-flash"],
-        "default_model": "glm-4-flash",
-        "strong_model": "glm-4-plus",
-    },
-    {
-        "id": "openrouter",
-        "label": "OpenRouter",
-        "provider": "openai_compatible",
-        "base_url": "https://openrouter.ai/api/v1",
-        "models": ["openai/gpt-4o-mini", "deepseek/deepseek-chat", "qwen/qwen-2.5-72b-instruct"],
-        "default_model": "openai/gpt-4o-mini",
-        "strong_model": "deepseek/deepseek-chat",
-    },
-    {
-        "id": "minimax",
-        "label": "MiniMax",
-        "provider": "openai_compatible",
-        "base_url": "https://api.minimaxi.com/v1",
-        "models": ["MiniMax-M2.7-highspeed", "MiniMax-M2.7", "MiniMax-M2.5-highspeed", "MiniMax-M2.5"],
-        "default_model": "MiniMax-M2.7-highspeed",
-        "strong_model": "MiniMax-M2.7",
-    },
-    {
-        "id": "gemini",
-        "label": "Google Gemini",
-        "provider": "openai_compatible",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "models": ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"],
-        "default_model": "gemini-3.5-flash",
-        "strong_model": "gemini-3.1-pro-preview",
-    },
-    {
-        "id": "siliconflow",
-        "label": "硅基流动",
-        "provider": "openai_compatible",
-        "base_url": "https://api.siliconflow.cn/v1",
-        "models": ["Qwen/Qwen2.5-72B-Instruct", "Pro/zai-org/GLM-4.7", "deepseek-ai/DeepSeek-V3", "Pro/deepseek-ai/DeepSeek-R1"],
-        "default_model": "Qwen/Qwen2.5-72B-Instruct",
-        "strong_model": "Pro/zai-org/GLM-4.7",
-    },
-    {
-        "id": "ollama",
-        "label": "Ollama（本地）",
-        "provider": "openai_compatible",
-        "base_url": "http://127.0.0.1:11434/v1",
-        "models": ["qwen3:8b", "qwen3:14b", "llama3.3", "deepseek-r1:14b"],
-        "default_model": "qwen3:8b",
-        "strong_model": "qwen3:14b",
-        "requires_api_key": False,
-    },
-    {
-        "id": "lmstudio",
-        "label": "LM Studio（本地）",
-        "provider": "openai_compatible",
-        "base_url": "http://127.0.0.1:1234/v1",
-        "models": ["openai/gpt-oss-20b"],
-        "default_model": "openai/gpt-oss-20b",
-        "strong_model": "openai/gpt-oss-20b",
-        "requires_api_key": False,
-    },
-    {
-        "id": "xai",
-        "label": "xAI Grok",
-        "provider": "openai_compatible",
-        "base_url": "https://api.x.ai/v1",
-        "models": ["grok-4.5"],
-        "default_model": "grok-4.5",
-        "strong_model": "grok-4.5",
-    },
-    {
-        "id": "doubao",
-        "label": "火山方舟 / 豆包",
-        "provider": "openai_compatible",
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "models": ["doubao-seed-2-0-lite-260215", "doubao-seed-2-0-pro-260215", "doubao-seed-1-6-250615"],
-        "default_model": "doubao-seed-2-0-lite-260215",
-        "strong_model": "doubao-seed-2-0-pro-260215",
-        "api_style": "responses",
-    },
-    {
-        "id": "qianfan",
-        "label": "百度千帆",
-        "provider": "openai_compatible",
-        "base_url": "https://qianfan.baidubce.com/v2",
-        "models": ["ernie-5.0", "ernie-5.0-thinking-preview", "ernie-4.5-turbo-128k", "deepseek-v3.2"],
-        "default_model": "ernie-5.0",
-        "strong_model": "ernie-5.0-thinking-preview",
-    },
-    {
-        "id": "hunyuan",
-        "label": "腾讯混元 / TokenHub",
-        "provider": "openai_compatible",
-        "base_url": "https://tokenhub.tencentmaas.com/v1",
-        "models": ["hy3-preview"],
-        "default_model": "hy3-preview",
-        "strong_model": "hy3-preview",
-    },
-]
-
-_MODEL_SERVICE_KEY_NAMES = {
-    service["id"]: f"EASYSOURCEFLOW_MODEL_API_KEY_{service['id'].upper()}"
-    for service in _MODEL_SERVICES
-    if service["id"] != "local"
-}
-
 
 class _LoginImportCoordinator:
     def __init__(self, settings: Settings) -> None:
@@ -484,6 +339,7 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                 "/model",
                 "/model/credentials",
                 "/model/credentials/delete",
+                "/model/catalog",
                 "/model/test",
                 "/prompt",
                 "/network/security",
@@ -524,6 +380,12 @@ def build_server(settings: Settings) -> ThreadingHTTPServer:
                             delete=parsed.path.endswith("/delete"),
                         )
                     )
+                except EasySourceFlowError as exc:
+                    self._json({"error": exc.to_dict()}, status=400)
+                return
+            if parsed.path == "/model/catalog":
+                try:
+                    self._json(_model_catalog_status(settings, payload))
                 except EasySourceFlowError as exc:
                     self._json({"error": exc.to_dict()}, status=400)
                 return
@@ -998,12 +860,15 @@ def _model_status(settings: Settings) -> dict:
     active_service = _model_service_for_settings(settings)
     configured_values = _read_env_values(_config_file_path())
     credential_status = {
-        service["id"]: bool(configured_values.get(_MODEL_SERVICE_KEY_NAMES.get(service["id"], ""), ""))
+        service["id"]: model_service_is_configured(service, configured_values)
         for service in _MODEL_SERVICES
     }
     credential_status["local"] = True
     if settings.model_api_key:
         credential_status[active_service["id"]] = True
+    if active_service.get("requires_api_key") is False:
+        credential_status[active_service["id"]] = True
+    fallback = settings.model_fallbacks[0] if settings.model_fallbacks else None
     available_models = []
     for service in _MODEL_SERVICES:
         for model in service["models"]:
@@ -1016,6 +881,9 @@ def _model_status(settings: Settings) -> dict:
         "model_base_url": settings.model_base_url,
         "model_api_key_configured": bool(settings.model_api_key),
         "active_service_id": active_service["id"],
+        "fallback_service_id": fallback.service_id if fallback else "",
+        "fallback_model": fallback.model if fallback else "",
+        "fallback_strong_model": fallback.strong_model if fallback else "",
         "credential_status": credential_status,
         "deepseek_base_url": settings.deepseek_base_url,
         "deepseek_api_key_configured": bool(settings.deepseek_api_key),
@@ -1066,11 +934,10 @@ def _model_test(settings: Settings, payload: dict | None = None) -> dict:
         deepseek_base_url=str(payload.get("model_base_url") or selected_service["base_url"]),
         deepseek_api_key=api_key,
     )
-    health = run_health_checks(candidate)
-    deepseek = next((item for item in health.get("checks", []) if item.get("name") == "deepseek_api"), None)
+    model_check = run_model_check(candidate)
     return {
-        "ok": bool(deepseek and deepseek.get("ok")),
-        "check": deepseek,
+        "ok": bool(model_check.get("ok")),
+        "check": model_check,
         "tested": {
             "service_id": selected_service["id"],
             "model": candidate.model,
@@ -1078,6 +945,31 @@ def _model_test(settings: Settings, payload: dict | None = None) -> dict:
         },
         "model": _model_status(settings),
     }
+
+
+def _model_catalog_status(settings: Settings, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    service_id = str(payload.get("service_id") or "").strip().lower()
+    service = _model_service_by_id(service_id)
+    if service is None:
+        raise EasySourceFlowError(
+            "invalid_model_config",
+            "Unsupported model service.",
+            ["Choose one of the model services returned by GET /model."],
+        )
+    configured_values = _read_env_values(_config_file_path())
+    key_name = _MODEL_SERVICE_KEY_NAMES.get(service_id)
+    api_key = str(payload.get("model_api_key") or "").strip()
+    if not api_key and key_name:
+        api_key = configured_values.get(key_name, "")
+    if not api_key and service_id == _model_service_for_settings(settings)["id"]:
+        api_key = settings.model_api_key
+    return model_catalog(
+        service,
+        api_key,
+        settings.data_dir / "cache" / "model-catalog.json",
+        force_refresh=bool(payload.get("force_refresh")),
+    )
 
 
 def _document_parser_status() -> dict:
@@ -1122,6 +1014,7 @@ def _model_update(settings: Settings, payload: dict) -> dict:
     if provider != "local" and not model_base_url.startswith(("http://", "https://")):
         raise EasySourceFlowError("invalid_model_config", "Model base URL must start with http:// or https://.", ["Use an official API base URL or a compatible endpoint."])
 
+    previous_service = _model_service_for_settings(settings)
     service = service or _model_service_for_config(provider, model_base_url)
     service_id = service["id"]
     key_name = _MODEL_SERVICE_KEY_NAMES.get(service_id)
@@ -1146,15 +1039,27 @@ def _model_update(settings: Settings, payload: dict) -> dict:
         "DEEPSEEK_BASE_URL": model_base_url,
         "EASYSOURCEFLOW_MODEL_API_KEY": active_api_key,
         "DEEPSEEK_API_KEY": active_api_key,
+        **model_profile_env_values(service_id, model, strong_model, model_base_url),
     }
     if key_name and (model_api_key or clear_model_api_key):
         values[key_name] = active_api_key
+    previous_key_name = _MODEL_SERVICE_KEY_NAMES.get(previous_service["id"])
+    if previous_key_name and settings.model_api_key and not configured_values.get(previous_key_name):
+        values[previous_key_name] = settings.model_api_key
+    merged_values = {**configured_values, **values}
+    preferred_fallback = str(configured_values.get(MODEL_FALLBACK_SERVICE_KEY, "")).strip().lower()
+    if previous_service["id"] != service_id and model_service_is_configured(previous_service, merged_values):
+        preferred_fallback = previous_service["id"]
+    merged_values[MODEL_FALLBACK_SERVICE_KEY] = preferred_fallback
+    fallback_profiles = configured_model_profiles(merged_values, service_id)
+    values[MODEL_FALLBACK_SERVICE_KEY] = fallback_profiles[0].service_id if fallback_profiles else ""
     config_file = _write_env_values(_config_file_path(), values)
     object.__setattr__(settings, "model_provider", provider)
     object.__setattr__(settings, "model", model)
     object.__setattr__(settings, "strong_model", strong_model)
     object.__setattr__(settings, "deepseek_base_url", model_base_url)
     object.__setattr__(settings, "deepseek_api_key", active_api_key)
+    _refresh_model_fallbacks(settings, {**configured_values, **values})
     logger.info("model configuration updated service=%s provider=%s model=%s strong_model=%s config_file=%s", service_id, provider, model, strong_model, config_file)
     return {"ok": True, "config_file": str(config_file), "model": _model_status(settings)}
 
@@ -1178,7 +1083,8 @@ def _model_credential_update(settings: Settings, payload: dict, delete: bool = F
 
     key_name = _MODEL_SERVICE_KEY_NAMES[service_id]
     value = "" if delete else api_key
-    values = {key_name: value}
+    values = {key_name: value, **model_profile_enabled_env_values(service_id, not delete)}
+    configured_values = _read_env_values(_config_file_path())
     active_service_id = _model_service_for_settings(settings)["id"]
     if service_id == active_service_id:
         values.update(
@@ -1188,7 +1094,12 @@ def _model_credential_update(settings: Settings, payload: dict, delete: bool = F
             }
         )
         object.__setattr__(settings, "deepseek_api_key", value)
+    merged_values = {**configured_values, **values}
+    active_service_id = _model_service_for_settings(settings)["id"]
+    fallback_profiles = configured_model_profiles(merged_values, active_service_id)
+    values[MODEL_FALLBACK_SERVICE_KEY] = fallback_profiles[0].service_id if fallback_profiles else ""
     config_file = _write_env_values(_config_file_path(), values)
+    _refresh_model_fallbacks(settings, {**configured_values, **values})
     logger.info(
         "model credential %s service=%s config_file=%s",
         "deleted" if delete else "updated",
@@ -1199,7 +1110,7 @@ def _model_credential_update(settings: Settings, payload: dict, delete: bool = F
 
 
 def _model_service_by_id(service_id: str) -> dict | None:
-    return next((service for service in _MODEL_SERVICES if service["id"] == service_id), None)
+    return model_service_by_id(service_id)
 
 
 def _validate_service_models(service: dict, model: str, strong_model: str) -> None:
@@ -1208,7 +1119,8 @@ def _validate_service_models(service: dict, model: str, strong_model: str) -> No
             (
                 candidate
                 for candidate in _MODEL_SERVICES
-                if candidate["id"] != service["id"] and name in candidate["models"]
+                if candidate["id"] != service["id"]
+                and name in [*candidate["models"], *candidate.get("legacy_models", [])]
             ),
             None,
         )
@@ -1221,16 +1133,17 @@ def _validate_service_models(service: dict, model: str, strong_model: str) -> No
 
 
 def _model_service_for_config(provider: str, base_url: str) -> dict:
-    if provider == "local":
-        return _model_service_by_id("local") or _MODEL_SERVICES[0]
-    return next(
-        (service for service in _MODEL_SERVICES if service["base_url"].rstrip("/") == base_url.rstrip("/")),
-        _model_service_by_id("deepseek") or _MODEL_SERVICES[1],
-    )
+    return model_service_for_config(provider, base_url)
 
 
 def _model_service_for_settings(settings: Settings) -> dict:
     return _model_service_for_config(settings.model_provider, settings.model_base_url)
+
+
+def _refresh_model_fallbacks(settings: Settings, configured_values: dict[str, str]) -> None:
+    active_service_id = _model_service_for_settings(settings)["id"]
+    profiles = configured_model_profiles(configured_values, active_service_id)
+    object.__setattr__(settings, "model_fallbacks", profiles[:1])
 
 
 def _open_resource_package(output_dir: Path, raw_path: str) -> dict:

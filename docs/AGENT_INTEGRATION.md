@@ -46,7 +46,9 @@ scripts/easysourceflow install-skill "$AGENT_WORKSPACE"
 
 Skill 规定所有单链接默认使用可恢复的异步流程、视频默认使用 Pro、最终 Markdown 原样交付、不得二次总结，以及用户回复“收藏”时收藏最近结果。飞书 `message` 工具的 `card` 参数必须传对象而不是 JSON 字符串；卡片发送失败时也只能回退为完整原始 Markdown，不能改成缩略总结。
 
-只发送一个支持的链接或 PDF、DOCX、EPUB、TXT、Markdown、HTML 附件而没有附加文字时，Skill 默认将其视为总结请求。重复发送也必须重新进入 EasySourceFlow，由缓存决定是否复用，Agent 不能自行回复“内容相同”。PDF 必须使用 `easysourceflow_submit_document_file` 提交原始附件；聊天系统内联的 PDF 文字可能只是前几页预览，不能作为完整正文。用户明确要求翻译、编辑等其他操作时，以明确要求为准。
+只发送一个支持的链接、飞书 Wiki/Docs 等云文档链接，或 PDF、DOCX、EPUB、TXT、Markdown、HTML 附件而没有附加文字时，Skill 默认将其视为总结请求。重复发送也必须重新进入 EasySourceFlow，由缓存决定是否复用，Agent 不能自行回复“内容相同”。PDF 必须使用 `easysourceflow_submit_document_file` 提交原始附件；聊天系统内联的 PDF 文字可能只是前几页预览，不能作为完整正文。用户明确要求翻译、编辑等其他操作时，以明确要求为准。
+
+飞书等需要登录的云文档不能直接交给公开网页抓取器。Agent 应先使用平台连接器读取完整标题和正文，再调用 `easysourceflow_submit_document`，同时传入用户发送的原始 HTTPS 链接作为 `source_url`。连接器只负责读取，最终总结必须由 EasySourceFlow 生成；不得把连接器正文直接交给 Agent 自行总结。结果会保留云文档来源并写入 Web 结果库。
 
 OpenClaw Agent 如果配置了 `agents.list[].skills` 白名单，还必须在目标 Agent 的现有列表中追加 `easysourceflow`，否则文件虽然已经复制，Skill 仍不会进入系统提示。先用 `openclaw config get agents.list --json` 找到目标 Agent，保留原有 Skill 后追加该名称，再运行：
 
@@ -78,6 +80,7 @@ openclaw gateway restart
 2. 总结视频链接，确认任务使用 Pro 且结果标出字幕来源。
 3. 只上传一个 PDF、不附加文字，确认 Agent 调用 `easysourceflow_submit_document_file` 而不是自行总结。
 4. 重复上传同一个 PDF，确认仍调用工具并由缓存复用结果，而不是回复“内容相同”。
-5. 在收到结果后回复“收藏”，确认只收藏当前结果且不重复发送全文。
+5. 只发送一个飞书 Wiki/Docs 链接，确认 Agent 先读取完整正文，再调用 `easysourceflow_submit_document` 并传入 `source_url`，而不是自行总结。
+6. 在收到结果后回复“收藏”，确认只收藏当前结果且不重复发送全文。
 
 完整工具契约见 [MCP_API.md](MCP_API.md)。Skill 的测试场景位于 `skills/easysourceflow/evals/evals.json`。

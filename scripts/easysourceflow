@@ -294,7 +294,19 @@ sync_runtime() {
         function web_managed(key) {
           return key == "EASYSOURCEFLOW_BILIBILI_COOKIES_FILE" ||
             key == "EASYSOURCEFLOW_YOUTUBE_COOKIES_FILE" ||
-            key == "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE"
+            key == "EASYSOURCEFLOW_YOUTUBE_BROWSER_COOKIE_SOURCE" ||
+            key == "EASYSOURCEFLOW_MODEL_PROVIDER" ||
+            key == "EASYSOURCEFLOW_MODEL" ||
+            key == "EASYSOURCEFLOW_STRONG_MODEL" ||
+            key == "EASYSOURCEFLOW_MODEL_BASE_URL" ||
+            key == "EASYSOURCEFLOW_MODEL_API_KEY" ||
+            key == "EASYSOURCEFLOW_MODEL_FALLBACK_SERVICE" ||
+            key == "DEEPSEEK_BASE_URL" ||
+            key == "DEEPSEEK_API_KEY" ||
+            key == "EASYSOURCEFLOW_TRUST_FAKE_IP" ||
+            key == "EASYSOURCEFLOW_FAKE_IP_CIDRS" ||
+            key ~ /^EASYSOURCEFLOW_MODEL_API_KEY_[A-Z0-9_]+$/ ||
+            key ~ /^EASYSOURCEFLOW_MODEL_(CONFIGURED|FAST|PRO|BASE_URL)_[A-Z0-9_]+$/
         }
         NR == FNR {
           if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) seen[$1] = 1

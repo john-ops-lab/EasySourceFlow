@@ -18,7 +18,7 @@ from .digest import _model_api_ready, _model_response_text, _uses_responses_api
 def run_health_checks(settings: Settings) -> dict:
     checks = [
         _check_data_dir(settings),
-        _check_deepseek(settings),
+        _check_model_configuration(settings),
         _check_ytdlp(settings),
         _check_ffmpeg(settings),
         _check_whisper(settings),
@@ -31,6 +31,11 @@ def run_health_checks(settings: Settings) -> dict:
     ]
     ok = all(item["ok"] for item in checks if item["required"])
     return {"ok": ok, "checks": checks}
+
+
+def run_model_check(settings: Settings) -> dict:
+    """Perform the explicit, potentially billable model connectivity test."""
+    return _check_deepseek(settings)
 
 
 def main() -> None:
@@ -56,6 +61,42 @@ def _check_data_dir(settings: Settings) -> dict:
             required=True,
             fix="Check EASYSOURCEFLOW_OUTPUT_DIR permissions or choose a writable output directory.",
         )
+
+
+def _check_model_configuration(settings: Settings) -> dict:
+    provider = settings.model_provider.lower()
+    if provider == "local":
+        return _result("model_config", True, "Local model mode does not require an external API.", required=False)
+    if provider not in {"deepseek", "openai_compatible"}:
+        return _result("model_config", True, "External model API is not the active provider.", required=False)
+    if not settings.model.strip():
+        return _result("model_config", False, "Model name is not configured.", required=True, fix="Choose a model in Web settings.")
+    try:
+        parsed = urlparse(settings.model_base_url)
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return _result(
+            "model_config",
+            False,
+            "Model API base URL is invalid.",
+            required=True,
+            fix="Choose an official API base URL or a compatible endpoint.",
+        )
+    if not _model_api_ready(settings):
+        return _result(
+            "model_config",
+            False,
+            "Model API key is not configured.",
+            required=True,
+            fix="Add the model API key in Web settings.",
+        )
+    return _result(
+        "model_config",
+        True,
+        "Model configuration is complete. Connectivity is tested only on explicit request.",
+        required=True,
+    )
 
 
 def _check_deepseek(settings: Settings) -> dict:
