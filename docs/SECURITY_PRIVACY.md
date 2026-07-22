@@ -106,8 +106,8 @@ cookies 等同登录凭证。
 
 控制措施：
 
-- 默认只允许 OpenClaw 标准上传目录 `<OPENCLAW_STATE_DIR>/media/inbound`，不允许读取工作区、主目录或任意绝对路径。
-- 其他上传目录必须通过 MCP 进程的 `EASYSOURCEFLOW_DOCUMENT_IMPORT_ROOTS` 明确添加。
+- 为向后兼容，默认允许 OpenClaw 标准上传目录 `<OPENCLAW_STATE_DIR>/media/inbound`；该规则不代表其他 Agent 使用同一路径。
+- 其他客户端的上传目录必须通过 MCP 进程的 `EASYSOURCEFLOW_DOCUMENT_IMPORT_ROOTS` 明确添加，不允许把工作区、主目录或文件系统根目录整体加入白名单。
 - 解析符号链接后的真实路径仍必须位于白名单目录内。
 - 只接受固定文档扩展名，默认最大 50 MiB，错误响应不返回文件正文。
 - PDF 使用原始文件进行全量提取；macOS 图片型 PDF 可使用系统 Vision OCR，避免把聊天平台的截断预览当成全文。

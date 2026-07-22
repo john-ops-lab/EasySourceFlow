@@ -114,7 +114,7 @@ LaunchAgent 文件位于：
 1. 运行 `scripts/easysourceflow status`。
 2. 运行 `scripts/easysourceflow health`。
 3. 确认 `EASYSOURCEFLOW_BASE_URL` 指向 `http://127.0.0.1:8765`。
-4. 如果是 OpenClaw 刚改过 MCP 配置，运行 `openclaw gateway restart`。
+4. 如果是 OpenClaw，运行 `openclaw mcp doctor easysourceflow --probe`；默认会热加载 MCP 配置，只有诊断明确要求时才重启 Gateway。
 
 ### 4.2 模型 API 失败
 

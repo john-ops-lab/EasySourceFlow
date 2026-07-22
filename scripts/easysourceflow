@@ -62,7 +62,7 @@ Commands:
   bilibili-regression [manifest] [--force-refresh]  Run opt-in real Bilibili regressions
   youtube-regression [manifest] [--force-refresh]   Run opt-in real YouTube regressions
   asr-eval <reference> <hypothesis> [duration]  Compare ASR output with a reference
-  install-skill <agent-workspace>  Install the official Agent skill
+  install-skill [--client CLIENT] [root]  Install the official Agent skill
   cleanup-preview  Preview old artifact cleanup
   cleanup-apply    Remove old artifacts after review
   backup     Back up SQLite database and output directory
@@ -585,22 +585,53 @@ run_asr_eval() {
 }
 
 install_agent_skill() {
+  local client="openclaw"
+  if [[ "${1:-}" == "--client" ]]; then
+    if [[ -z "${2:-}" ]]; then
+      printf 'Usage: scripts/easysourceflow install-skill [--client openclaw|codex|claude-code] [root]\n' >&2
+      return 2
+    fi
+    client="${2}"
+    shift 2
+  fi
   local workspace="${1:-${EASYSOURCEFLOW_AGENT_WORKSPACE:-}}"
   if [[ -z "${workspace}" ]]; then
-    printf 'Usage: scripts/easysourceflow install-skill <agent-workspace>\n' >&2
-    return 2
+    if [[ "${client}" == "codex" || "${client}" == "claude-code" ]]; then
+      workspace="${HOME}"
+    else
+      printf 'Usage: scripts/easysourceflow install-skill [--client openclaw|codex|claude-code] [root]\n' >&2
+      return 2
+    fi
   fi
   if [[ ! -f "${ROOT_DIR}/skills/easysourceflow/SKILL.md" ]]; then
     printf 'Official skill is missing from %s\n' "${ROOT_DIR}/skills/easysourceflow" >&2
     return 1
   fi
-  local target="${workspace%/}/skills/easysourceflow"
+  local target
+  case "${client}" in
+    openclaw)
+      target="${workspace%/}/skills/easysourceflow"
+      ;;
+    codex)
+      target="${workspace%/}/.agents/skills/easysourceflow"
+      ;;
+    claude-code)
+      target="${workspace%/}/.claude/skills/easysourceflow"
+      ;;
+    *)
+      printf 'Unknown Agent client: %s (expected openclaw, codex, or claude-code)\n' "${client}" >&2
+      return 2
+      ;;
+  esac
   mkdir -p "${target}"
   rsync -a --delete "${ROOT_DIR}/skills/easysourceflow/" "${target}/"
   printf 'Installed EasySourceFlow skill: %s\n' "${target}"
-  printf 'OpenClaw: if the target agent defines an agents.list[].skills allowlist, add "easysourceflow" and restart the gateway.\n'
-  printf 'OpenClaw: after every Skill install or update, send /new as a standalone message in the target Agent chat.\n'
-  printf 'Existing chats can retain an older Skill snapshot even after the gateway restarts.\n'
+  if [[ "${client}" == "openclaw" ]]; then
+    printf 'OpenClaw: verify the effective skill allowlist, then send /new as a standalone message in the target chat.\n'
+    printf 'OpenClaw hot-loads skills and MCP config by default; restart the gateway only when diagnostics require it.\n'
+  else
+    printf 'Start a new %s conversation so the client discovers the installed Skill.\n' "${client}"
+  fi
 }
 
 maintenance_run() {
@@ -730,7 +761,8 @@ case "${command}" in
     run_asr_eval "${2:-}" "${3:-}" "${4:-}"
     ;;
   install-skill)
-    install_agent_skill "${2:-}"
+    shift
+    install_agent_skill "$@"
     ;;
   cleanup-preview)
     cleanup_preview "${2:-14}"

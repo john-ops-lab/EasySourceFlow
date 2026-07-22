@@ -1117,6 +1117,9 @@ INDEX_HTML = """<!doctype html>
     .editor-meta { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; color: var(--muted); font-size: 12px; }
     .fixed-rule-list { margin: 12px 0 0; padding-left: 20px; color: #3f3f3f; font-size: 13px; line-height: 1.8; }
     .agent-status-list { margin-top: 8px; }
+    .agent-client-picker { display: grid; gap: 8px; max-width: 520px; margin-top: 18px; }
+    .agent-client-picker label { font-size: 13px; font-weight: 700; color: var(--muted-strong); }
+    .agent-client-picker p { margin: 0; }
     .agent-status-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
     .agent-status-row:last-child { border-bottom: 0; }
     .agent-status-row strong { font-size: 14px; }
@@ -1617,11 +1620,16 @@ INDEX_HTML = """<!doctype html>
                   <div><h3>Agent 接入状态</h3><p id="agent-status-message">正在检查本机服务、MCP 和 Skill。</p></div>
                   <span class="status" id="agent-state-pill">检查中</span>
                 </div>
+                <div class="agent-client-picker">
+                  <label for="agent-client">选择要接入的 Agent</label>
+                  <select id="agent-client"></select>
+                  <p class="meta" id="agent-client-description"></p>
+                </div>
                 <div class="agent-status-list" id="agent-status-list"></div>
               </div>
               <div class="settings-section">
                 <h3>1. 配置 MCP</h3>
-                <p>把下面通用示例加入 Agent 的 MCP 配置，并在本机把 &lt;PROJECT_ROOT&gt; 替换为项目目录。模型密钥仍由 EasySourceFlow 管理，不要复制给 Agent，也不要把替换后的本机路径提交到 Git。</p>
+                <p>下面内容已按所选 Agent 生成。把 &lt;PROJECT_ROOT&gt; 替换为本机项目目录；模型密钥仍由 EasySourceFlow 管理，不要复制给 Agent。</p>
                 <pre class="code-block"><code id="agent-mcp-config">读取中</code><button class="icon-button secondary copy-code" id="copy-mcp-config" type="button" title="复制 MCP 配置" aria-label="复制 MCP 配置">⧉</button></pre>
               </div>
               <div class="settings-section">
@@ -1636,7 +1644,8 @@ INDEX_HTML = """<!doctype html>
               </div>
               <div class="settings-section">
                 <h3>4. 验证连接</h3>
-                <p>让 Agent 调用 EasySourceFlow 的健康检查或提交一个链接。本页会记录最近一次真实 MCP 调用，自动刷新后显示为“最近已连接”。</p>
+                <p>先完成客户端自己的检查，再让 Agent 调用 EasySourceFlow 健康检查或提交一个链接。本页只能确认最近收到过 MCP 调用，不能代替客户端诊断。</p>
+                <pre class="code-block"><code id="agent-verify-command">读取中</code><button class="icon-button secondary copy-code" id="copy-agent-verify-command" type="button" title="复制验证命令" aria-label="复制验证命令">⧉</button></pre>
               </div>
             </div>
             <div id="network-maintenance" class="maintenance-view">
@@ -1694,7 +1703,7 @@ INDEX_HTML = """<!doctype html>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <script>
-    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, credentialDirty: false, promptDirty: false, networkSecurityDirty: false, prompt: null, agent: null, networkSecurity: null, model: null, modelServices: [], modelCatalogs: {}, modelCatalogLoading: new Set(), health: null, healthLoadedAt: 0, runtimeStatus: null, readinessTarget: 'system-maintenance', initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
+    const state = { outputs: [], favorites: [], favoritePaths: new Set(), jobs: [], downloads: [], outputsByPath: new Map(), activeBatch: null, activeJob: null, queue: null, settingsDirty: false, credentialDirty: false, promptDirty: false, networkSecurityDirty: false, prompt: null, agent: null, agentClient: 'openclaw', networkSecurity: null, model: null, modelServices: [], modelCatalogs: {}, modelCatalogLoading: new Set(), health: null, healthLoadedAt: 0, runtimeStatus: null, readinessTarget: 'system-maintenance', initialized: false, refreshing: false, searchResults: [], searchQuery: '', searchVisibleCount: 20 };
     const ACTIVE_REFRESH_MS = 2000;
     const IDLE_REFRESH_MS = 10000;
     const HEALTH_REFRESH_MS = 60000;
@@ -2358,7 +2367,7 @@ INDEX_HTML = """<!doctype html>
         const err = job.error_message ? `<div class="meta">${esc(job.error_code)} · ${esc(job.error_message)}</div>` : '';
         const transcript = transcriptMeta(result);
         const cancel = ['queued', 'running'].includes(job.status) ? `<button class="link-button" type="button" onclick="cancelJob('${esc(job.job_id)}')">取消</button>` : '';
-        const quality = (job.summary_quality || result.summary_quality || 'fast').toLowerCase() === 'pro' ? 'Pro' : 'Fast';
+        const quality = (result.summary_quality || job.summary_quality || 'fast').toLowerCase() === 'pro' ? 'Pro' : 'Fast';
         const outputItem = result.output_markdown_path ? state.outputsByPath.get(result.output_markdown_path) : null;
         const title = outputItem
           ? `<a class="title" href="${esc(outputItem.view_url)}" target="_blank" rel="noreferrer">${esc(job.title || job.url)}</a>`
@@ -2415,7 +2424,7 @@ INDEX_HTML = """<!doctype html>
       const transcript = transcriptMeta(result);
       const cancel = ['queued', 'running'].includes(job.status) ? `<button class="link-button" type="button" onclick="cancelJob('${esc(job.job_id)}')">取消</button>` : '';
       const packageButton = result.resource_package_path ? `<button class="link-button" type="button" onclick="openResourcePackage('${esc(job.job_id)}')">打开资源包</button>` : '';
-      const retryQuality = job.summary_quality || result.summary_quality || 'fast';
+      const retryQuality = result.summary_quality || job.summary_quality || 'fast';
       const summaryModel = result.summary_model || result.source?.metadata?.summary_model || '';
       const failoverUsed = result.model_failover_used || result.source?.metadata?.model_failover_used;
       $('job-detail').innerHTML = `
@@ -2665,18 +2674,23 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function loadAgentStatus() {
-      const agent = await getJson('/agent/status');
-      state.agent = agent;
-      const stateLabels = { connected: '最近已连接', ready: '接入就绪', mcp_ready: '待装 Skill', needs_setup: '需要配置' };
-      $('agent-state-pill').textContent = stateLabels[agent.state] || agent.state || '未知';
-      $('agent-state-pill').className = `status ${agent.state === 'connected' || agent.state === 'ready' ? 'succeeded' : agent.state === 'needs_setup' ? 'failed' : 'queued'}`;
-      $('agent-status-message').textContent = agent.message || '';
+    function renderAgentClient() {
+      const agent = state.agent || {};
+      const clients = agent.clients || [];
+      const profile = clients.find((item) => item.id === state.agentClient) || clients[0] || {};
+      if (profile.id) state.agentClient = profile.id;
+      $('agent-client-description').textContent = profile.description || '';
+      $('agent-status-message').textContent = agent.activity?.recent
+        ? '最近 10 分钟内收到过 MCP 调用。以下状态和命令按所选 Agent 展示。'
+        : '尚未检测到最近 MCP 调用。请按所选 Agent 的步骤完成配置和验证。';
+      $('agent-state-pill').textContent = agent.activity?.recent ? '最近已连接' : agent.mcp?.available ? 'MCP 已就绪' : '需要配置';
+      $('agent-state-pill').className = `status ${agent.activity?.recent ? 'succeeded' : agent.mcp?.available ? 'queued' : 'failed'}`;
       const seen = agent.activity?.last_seen_at ? new Date(agent.activity.last_seen_at).toLocaleString('zh-CN', { hour12: false }) : '尚无记录';
+      const skillDetected = profile.skill_installed;
       const rows = [
         ['本机服务', agent.service_url || '-', true, '运行中'],
         ['MCP 适配器', agent.mcp?.available ? '已在本机找到 MCP 命令' : '未找到 MCP 命令', Boolean(agent.mcp?.available), agent.mcp?.available ? '可用' : '缺失'],
-        ['官方 Skill', agent.skill?.installed ? '已在配置的 Agent 工作区安装' : agent.skill?.configured ? '工作区已配置，尚未安装 Skill' : '尚未配置 Agent 工作区', Boolean(agent.skill?.installed), agent.skill?.installed ? '已安装' : '未安装'],
+        ['官方 Skill', profile.skill_status || '请按客户端说明确认', skillDetected, skillDetected === true ? '已安装' : skillDetected === false ? '未检测到' : '需确认'],
         ['最近 MCP 调用', seen, Boolean(agent.activity?.recent), agent.activity?.recent ? '10 分钟内' : '未连接'],
       ];
       $('agent-status-list').innerHTML = rows.map(([label, detail, ok, status]) => `
@@ -2686,19 +2700,23 @@ INDEX_HTML = """<!doctype html>
           <span class="status ${ok ? 'succeeded' : 'queued'}">${esc(status)}</span>
         </div>
       `).join('');
-      const mcpConfig = {
-        mcpServers: {
-          easysourceflow: {
-            command: agent.mcp?.command || '/path/to/easysourceflow-mcp',
-            env: { EASYSOURCEFLOW_BASE_URL: agent.service_url || 'http://127.0.0.1:8765' }
-          }
-        }
-      };
-      $('agent-mcp-config').textContent = JSON.stringify(mcpConfig, null, 2);
-      $('agent-skill-command').textContent = agent.install_command || 'scripts/easysourceflow install-skill "$AGENT_WORKSPACE"';
-      $('agent-session-command').textContent = agent.session_refresh_command || '/new';
-      $('agent-session-refresh-message').textContent = agent.session_refresh_message || '安装或更新 Skill 后，在目标 Agent 聊天中单独发送 /new。';
+      $('agent-mcp-config').textContent = profile.mcp_config || '';
+      $('agent-skill-command').textContent = profile.skill_command || '';
+      $('agent-session-command').textContent = profile.session_command || '';
+      $('agent-session-refresh-message').textContent = profile.session_message || '';
+      $('agent-verify-command').textContent = profile.verify_command || '';
       renderReadiness();
+    }
+
+    async function loadAgentStatus() {
+      const agent = await getJson('/agent/status');
+      state.agent = agent;
+      const selector = $('agent-client');
+      const selected = state.agentClient;
+      selector.innerHTML = (agent.clients || []).map((client) => `<option value="${esc(client.id)}">${esc(client.label)}</option>`).join('');
+      selector.value = (agent.clients || []).some((client) => client.id === selected) ? selected : agent.clients?.[0]?.id || '';
+      state.agentClient = selector.value;
+      renderAgentClient();
     }
 
     async function copyText(text, successMessage) {
@@ -3384,6 +3402,11 @@ INDEX_HTML = """<!doctype html>
     $('copy-mcp-config').addEventListener('click', () => copyText($('agent-mcp-config').textContent, 'MCP 配置已复制'));
     $('copy-skill-command').addEventListener('click', () => copyText($('agent-skill-command').textContent, 'Skill 安装命令已复制'));
     $('copy-agent-session-command').addEventListener('click', () => copyText($('agent-session-command').textContent, '会话刷新命令已复制'));
+    $('copy-agent-verify-command').addEventListener('click', () => copyText($('agent-verify-command').textContent, '验证命令已复制'));
+    $('agent-client').addEventListener('change', (event) => {
+      state.agentClient = event.target.value;
+      renderAgentClient();
+    });
     ['model-name', 'strong-model-name'].forEach((id) => {
       $(id).addEventListener('input', () => {
         markModelDirty();

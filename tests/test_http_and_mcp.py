@@ -275,8 +275,13 @@ class HttpAndMcpTests(unittest.TestCase):
                     self.assertFalse(before["activity"]["recent"])
                     self.assertNotIn(str(root), json.dumps(before, ensure_ascii=False))
                     self.assertEqual(before["mcp"]["command"], "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp")
-                    self.assertEqual(before["session_refresh_command"], "/new")
-                    self.assertIn("单独发送 /new", before["session_refresh_message"])
+                    clients = {item["id"]: item for item in before["clients"]}
+                    self.assertEqual(set(clients), {"openclaw", "codex", "claude-code", "generic"})
+                    self.assertIn("mcp doctor easysourceflow --probe", clients["openclaw"]["verify_command"])
+                    self.assertEqual(clients["openclaw"]["session_command"], "/new")
+                    self.assertIn("--client codex", clients["codex"]["skill_command"])
+                    self.assertIn("--scope user", clients["claude-code"]["mcp_config"])
+                    self.assertTrue(clients["openclaw"]["skill_installed"])
 
                     heartbeat = Request(
                         f"{base_url}/health",
@@ -1199,8 +1204,8 @@ class HttpAndMcpTests(unittest.TestCase):
         )
         self.assertIn("EasySourceFlow final Markdown", text)
         self.assertIn("Relay the Markdown below verbatim", text)
-        self.assertIn("message tool `card`", text)
-        self.assertIn("never put card JSON in `message`", text)
+        self.assertIn("active channel's supported Markdown delivery format", text)
+        self.assertIn("without changing the content", text)
         self.assertIn("easysourceflow_favorite_result", text)
         self.assertIn("output_markdown_path=/tmp/result.md", text)
         self.assertIn("# Title", text)

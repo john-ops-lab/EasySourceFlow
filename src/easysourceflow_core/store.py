@@ -179,6 +179,9 @@ class JobStore:
     def mark_running(self, job_id: str, stage: str, progress: float) -> None:
         self._update(job_id, status="running", stage=stage, progress=progress)
 
+    def update_summary_quality(self, job_id: str, summary_quality: str) -> None:
+        self._update(job_id, summary_quality=summary_quality)
+
     def mark_succeeded(self, job_id: str, canonical_url: str, title: str, result: dict) -> None:
         result_json = json.dumps(result, ensure_ascii=False)
         self._update(

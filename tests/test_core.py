@@ -435,9 +435,14 @@ class CoreTests(unittest.TestCase):
         self.assertIn("openResourcePackage", page)
         self.assertIn("总结模型：", page)
         self.assertIn("自动备用", page)
+        self.assertIn("result.summary_quality || job.summary_quality || 'fast'", page)
+        self.assertNotIn("job.summary_quality || result.summary_quality || 'fast'", page)
         self.assertIn('id="summary-prompt"', page)
         self.assertIn('id="youtube-import-button"', page)
         self.assertIn('data-maintenance-tab="agent-maintenance"', page)
+        self.assertIn('id="agent-client"', page)
+        self.assertIn('id="agent-verify-command"', page)
+        self.assertIn("renderAgentClient", page)
         self.assertIn("支持来源：", page)
         self.assertIn('id="download-panel"', page)
         self.assertIn('id="download-form"', page)
@@ -713,6 +718,7 @@ class CoreTests(unittest.TestCase):
 
             self.assertEqual(job["status"], "succeeded")
             self.assertEqual(seen_models, ["pro-model"])
+            self.assertEqual(job["summary_quality"], "pro")
             self.assertEqual(job["result"]["summary_quality"], "pro")
             self.assertEqual(job["result"]["summary_model"], "pro-model")
 

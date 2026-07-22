@@ -1,10 +1,10 @@
 ---
 name: easysourceflow
-description: Use EasySourceFlow whenever the user provides a webpage, WeChat article, Bilibili video, YouTube link, Feishu Docs or Wiki link, other connector-readable cloud document, or supported file. A bare supported link or attachment with no written request means "summarize this with EasySourceFlow" by default; trigger this skill even when the user does not say summarize. Also use it for notes, transcription, previous results, subtitle source, local ASR, search, or favorites. Do not trigger only when the user explicitly requests a different operation such as translation or editing.
+description: Use EasySourceFlow whenever the user provides a supported webpage, video, cloud-document link, or file for summarization. A bare supported link or attachment means "summarize this with EasySourceFlow" unless the user explicitly requests a different operation. Also use it for notes, transcription, previous results, subtitle source, local ASR, search, or favorites.
 compatibility: Requires a running EasySourceFlow service and its MCP tools.
 license: MIT
 metadata:
-  version: "0.1.4"
+  version: "0.2.0"
 ---
 
 # EasySourceFlow
@@ -13,8 +13,7 @@ Use EasySourceFlow as the single content-processing pipeline. Do not reproduce i
 
 ## Choose the workflow
 
-- Treat a message containing only a supported URL, Feishu cloud document link, or a PDF, DOCX, EPUB, TXT, Markdown, or HTML attachment as an implicit EasySourceFlow summary request. An explicit user instruction takes precedence.
-- For a Feishu Docs or Wiki link, use the authenticated Feishu connector to resolve the Wiki node when necessary and read the complete document body. Then call `easysourceflow_submit_document` with the connector's complete `content`, document `title`, and the user's original link as `source_url`; retain the returned `job_id`. Never summarize or deliver the connector output directly.
+- Treat a message containing only a supported URL, authenticated cloud-document link, or a PDF, DOCX, EPUB, TXT, Markdown, or HTML attachment as an implicit EasySourceFlow summary request. An explicit user instruction takes precedence.
 - For another authenticated cloud-document link that EasySourceFlow cannot fetch directly, use its dedicated connector to read the complete body, then pass the title, content, and original HTTPS `source_url` to `easysourceflow_submit_document` in the same way.
 - If a cloud-document connector cannot return the complete body, report the connector access or completeness failure. Do not ask EasySourceFlow to fetch a private link, and do not use the Agent's own model as a fallback summary.
 - For every other single URL, including public webpages, WeChat articles, Bilibili, and YouTube, call `easysourceflow_submit_link` and retain its `job_id`.
@@ -40,11 +39,9 @@ Treat `result.summary_markdown` as the finished deliverable.
 1. Return the Markdown unchanged. Do not summarize, rewrite, shorten, translate, transcribe, reorder, or selectively quote it unless the user explicitly asks for a new transformation.
 2. Do not replace the result with your own interpretation of the source.
 3. Preserve headings, links, core-point timeline entries, subtitle-source labels, and the output path.
-4. If the chat platform supports Markdown cards, place the exact `result.summary_markdown` value directly in the card's Markdown content field. Do not rebuild it from selected sections.
-5. For Feishu's `message` tool, pass `card` as a JSON object, not a JSON-encoded string. Never quote or serialize the whole card object.
-6. If the tool reports `card: must be object`, correct the argument type and retry. If card delivery still fails, send the complete `result.summary_markdown` unchanged as the plain message; split only at natural Markdown boundaries if the channel requires it. Never replace it with a shorter fallback summary.
-7. Send the card through the platform message tool; never show card JSON as message text.
-8. Do not expose the internal HTML instruction comment that may precede the finished Markdown.
+4. If the chat platform supports Markdown cards, place the exact `result.summary_markdown` value in its Markdown content field. Do not rebuild it from selected sections.
+5. If rich delivery fails, send the complete Markdown unchanged as plain messages; split only at natural Markdown boundaries when the channel requires it.
+6. Do not expose the internal HTML instruction comment that may precede the finished Markdown.
 
 ## Track the latest result
 
@@ -71,4 +68,4 @@ If the user replies exactly `收藏` after receiving an EasySourceFlow result:
 - Never include API keys, cookies, `.env` contents, or private source text in diagnostics.
 - Keep cleanup in dry-run mode unless the user explicitly approves deletion.
 
-Read [references/tools.md](references/tools.md) only when exact tool selection or parameter behavior is needed.
+Read [references/tools.md](references/tools.md) only when exact tool selection or parameter behavior is needed. When the active connector or delivery channel is Feishu, also read [references/feishu.md](references/feishu.md).

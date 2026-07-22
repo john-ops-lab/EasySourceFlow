@@ -776,7 +776,13 @@ def _agent_status(settings: Settings) -> dict:
     mcp_executable = _find_mcp_executable(settings)
     workspace = _agent_workspace(settings)
     skill_path = workspace / "skills" / "easysourceflow" / "SKILL.md" if workspace else None
-    skill_installed = bool(skill_path and skill_path.is_file())
+    shared_skill_path = Path.home() / ".agents" / "skills" / "easysourceflow" / "SKILL.md"
+    managed_openclaw_skill_path = Path.home() / ".openclaw" / "skills" / "easysourceflow" / "SKILL.md"
+    claude_skill_path = Path.home() / ".claude" / "skills" / "easysourceflow" / "SKILL.md"
+    workspace_skill_installed = bool(skill_path and skill_path.is_file())
+    shared_skill_installed = shared_skill_path.is_file()
+    openclaw_skill_installed = workspace_skill_installed or shared_skill_installed or managed_openclaw_skill_path.is_file()
+    claude_skill_installed = claude_skill_path.is_file()
     activity = _read_agent_activity(settings)
     recent = False
     if activity.get("last_seen_at"):
@@ -790,7 +796,7 @@ def _agent_status(settings: Settings) -> dict:
     if recent:
         state = "connected"
         message = "最近 10 分钟内收到过 Agent 的 MCP 调用。"
-    elif mcp_executable and skill_installed:
+    elif mcp_executable and openclaw_skill_installed:
         state = "ready"
         message = "MCP 和 Skill 已就绪，尚未检测到最近调用。"
     elif mcp_executable:
@@ -799,6 +805,85 @@ def _agent_status(settings: Settings) -> dict:
     else:
         state = "needs_setup"
         message = "尚未找到 MCP 可执行文件，请先完成本地安装。"
+    clients = [
+        {
+            "id": "openclaw",
+            "label": "OpenClaw",
+            "description": "新版 OpenClaw 原生 MCP 与 Agent Skills 接入。先确认 openclaw CLI 能在当前终端正常运行。",
+            "mcp_config": (
+                'openclaw mcp add easysourceflow \\\n'
+                '  --command "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp" \\\n'
+                '  --env EASYSOURCEFLOW_BASE_URL=http://127.0.0.1:8765'
+            ),
+            "skill_command": 'openclaw skills install "<PROJECT_ROOT>/skills/easysourceflow" --agent <agent-id> --force',
+            "session_command": "/new",
+            "session_message": "安装或更新 Skill 后，在目标聊天中单独发送 /new。MCP 和 Skill 默认热加载，只有诊断明确要求时才重启 Gateway。",
+            "verify_command": (
+                "openclaw config validate\n"
+                "openclaw mcp doctor easysourceflow --probe\n"
+                "openclaw skills check"
+            ),
+            "skill_installed": openclaw_skill_installed,
+            "skill_status": "已检测到 OpenClaw 可用的 Skill" if openclaw_skill_installed else "尚未检测到 OpenClaw 可用的 Skill",
+        },
+        {
+            "id": "codex",
+            "label": "Codex",
+            "description": "Codex CLI、IDE 扩展和桌面端共享同一主机上的 MCP 配置。",
+            "mcp_config": (
+                "codex mcp add easysourceflow \\\n"
+                "  --env EASYSOURCEFLOW_BASE_URL=http://127.0.0.1:8765 \\\n"
+                '  -- "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp"'
+            ),
+            "skill_command": 'scripts/easysourceflow install-skill --client codex "$HOME"',
+            "session_command": "新建 Codex 任务",
+            "session_message": "安装或更新 Skill 后新建一个 Codex 任务，使客户端重新发现用户级 Skill。",
+            "verify_command": "codex mcp list\n然后在新任务中调用 easysourceflow_health",
+            "skill_installed": shared_skill_installed,
+            "skill_status": "已检测到用户级 Codex Skill" if shared_skill_installed else "尚未在 ~/.agents/skills 检测到",
+        },
+        {
+            "id": "claude-code",
+            "label": "Claude Code",
+            "description": "使用用户级 stdio MCP 配置和 Claude Code 的 Agent Skills 目录。",
+            "mcp_config": (
+                "claude mcp add \\\n"
+                "  --transport stdio \\\n"
+                "  --scope user \\\n"
+                "  --env EASYSOURCEFLOW_BASE_URL=http://127.0.0.1:8765 \\\n"
+                '  easysourceflow -- "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp"'
+            ),
+            "skill_command": 'scripts/easysourceflow install-skill --client claude-code "$HOME"',
+            "session_command": "新建 Claude Code 会话",
+            "session_message": "安装或更新 Skill 后开启新会话，再通过 /mcp 确认 EasySourceFlow 已连接。",
+            "verify_command": "claude mcp list\n进入 Claude Code 后运行 /mcp",
+            "skill_installed": claude_skill_installed,
+            "skill_status": "已检测到用户级 Claude Code Skill" if claude_skill_installed else "尚未在 ~/.claude/skills 检测到",
+        },
+        {
+            "id": "generic",
+            "label": "其他 MCP 客户端",
+            "description": "适用于能够启动本地 stdio MCP 服务的 Agent。配置字段名以客户端官方说明为准。",
+            "mcp_config": json.dumps(
+                {
+                    "mcpServers": {
+                        "easysourceflow": {
+                            "command": "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp",
+                            "env": {"EASYSOURCEFLOW_BASE_URL": "http://127.0.0.1:8765"},
+                        }
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            "skill_command": "将 <PROJECT_ROOT>/skills/easysourceflow 安装到客户端官方 Skill 目录",
+            "session_command": "按客户端方式新建会话",
+            "session_message": "不同客户端的 Skill 目录和会话刷新方式不同；不支持 Agent Skills 时仍可使用 MCP。",
+            "verify_command": "确认工具列表包含 easysourceflow_health，然后调用它检查服务",
+            "skill_installed": None,
+            "skill_status": "是否支持 Skill 取决于客户端；MCP 可独立使用",
+        },
+    ]
     return {
         "ok": bool(mcp_executable),
         "state": state,
@@ -809,7 +894,7 @@ def _agent_status(settings: Settings) -> dict:
             "command": "<PROJECT_ROOT>/.venv/bin/easysourceflow-mcp",
         },
         "skill": {
-            "installed": skill_installed,
+            "installed": openclaw_skill_installed,
             "configured": bool(workspace),
         },
         "activity": {
@@ -817,9 +902,7 @@ def _agent_status(settings: Settings) -> dict:
             "last_seen_at": activity.get("last_seen_at"),
             "last_path": activity.get("last_path"),
         },
-        "install_command": 'scripts/easysourceflow install-skill "$AGENT_WORKSPACE"',
-        "session_refresh_command": "/new",
-        "session_refresh_message": "安装或更新 Skill 后，在目标 Agent 聊天中单独发送 /new，以加载新的会话规则。",
+        "clients": clients,
     }
 
 

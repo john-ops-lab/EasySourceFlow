@@ -31,9 +31,7 @@ TOOLS = [
             "Compatibility tool for synchronously summarizing a short non-video webpage. Do not use this "
             "tool for Bilibili or YouTube; use easysourceflow_submit_link and then independently call "
             "easysourceflow_get_job. The tool returns final Markdown "
-            "intended for direct delivery to the user; relay it verbatim unless the user explicitly asks you to rewrite it. "
-            "For chat-card delivery, put the Markdown in the message tool's card.elements markdown content; "
-            "do not send card JSON as plain message text."
+            "intended for direct delivery to the user; relay it verbatim unless the user explicitly asks you to rewrite it."
         ),
         "inputSchema": {
             "type": "object",
@@ -72,9 +70,7 @@ TOOLS = [
             "If status remains queued or running, call this tool again with the same job ID; do not fetch or summarize "
             "the source with another tool. Only status=succeeded with result.summary_markdown is a completed summary. "
             "If the job succeeded, the tool returns final Markdown "
-            "intended for direct delivery to the user; relay it verbatim unless the user explicitly asks you to rewrite it. "
-            "For chat-card delivery, put the Markdown in the message tool's card.elements markdown content; "
-            "do not send card JSON as plain message text."
+            "intended for direct delivery to the user; relay it verbatim unless the user explicitly asks you to rewrite it."
         ),
         "inputSchema": {
             "type": "object",
@@ -696,8 +692,8 @@ def _format_payload(payload: dict) -> str:
         summary = str(result["summary_markdown"]).rstrip()
         return (
             "<!-- EasySourceFlow final Markdown. Relay the Markdown below verbatim unless the user explicitly "
-            "asks for rewriting. For chat-card delivery, send it via message tool `card`, with this Markdown as "
-            "`card.elements[0].content`; never put card JSON in `message`. If the user replies exactly '收藏', "
+            "asks for rewriting. Use the active channel's supported Markdown delivery format without changing "
+            "the content. If the user replies exactly '收藏', "
             f"call easysourceflow_favorite_result with this output path. output_markdown_path={output_path} -->\n"
             f"{summary}"
         )

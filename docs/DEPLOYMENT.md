@@ -182,36 +182,20 @@ scripts/easysourceflow uninstall-launchd
 
 ## 8. MCP 配置
 
-Codex / OpenClaw 需要配置 stdio MCP server，命令指向：
+所有支持的本机 Agent 都通过 stdio 启动：
 
 ```bash
 python3 -m easysourceflow_mcp.server
 ```
 
-概念示例：
+安装后的可执行文件优先于 `python -m` 与手工 `PYTHONPATH`，可以减少解释器和工作目录差异。具体注册、Skill 安装和验证命令见：
 
-```toml
-[mcp_servers.easysourceflow]
-command = "python3"
-args = ["-m", "easysourceflow_mcp.server"]
-env = { PYTHONPATH = "/path/to/EasySourceFlow/src", EASYSOURCEFLOW_BASE_URL = "http://127.0.0.1:8765" }
-```
+- [OpenClaw](agents/openclaw.md)
+- [Codex](agents/codex.md)
+- [Claude Code](agents/claude-code.md)
+- [通用 stdio MCP](agents/generic-mcp.md)
 
-OpenClaw 当前 CLI 可用以下命令注册：
-
-```bash
-openclaw mcp set easysourceflow '{"command":"python3","args":["-m","easysourceflow_mcp.server"],"env":{"PYTHONPATH":"/path/to/EasySourceFlow/src","EASYSOURCEFLOW_BASE_URL":"http://127.0.0.1:8765"}}'
-openclaw gateway restart
-```
-
-验证：
-
-```bash
-openclaw mcp list
-openclaw agent --agent varys --message '请调用 EasySourceFlow 的 MCP 健康检查工具，只返回它是否 ok。不要总结别的内容。' --json
-```
-
-具体配置文件路径以当前 Agent 客户端为准。
+不要把某个客户端的配置 JSON、Skill 目录或会话命令复制给其他客户端。
 
 ## 9. B 站 cookies
 

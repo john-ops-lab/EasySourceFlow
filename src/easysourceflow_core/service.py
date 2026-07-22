@@ -163,7 +163,7 @@ class EasySourceFlowService:
             return None
         retry_instruction = original.get("instruction") if instruction is None else instruction
         result = original.get("result") or {}
-        retry_quality = _normalize_summary_quality(summary_quality or original.get("summary_quality") or result.get("summary_quality") or "fast")
+        retry_quality = _normalize_summary_quality(summary_quality or result.get("summary_quality") or original.get("summary_quality") or "fast")
         source = result.get("source") or {}
         request_payload = original.get("request_payload") or {}
         if original.get("request_kind") == "document" and request_payload.get("content"):
@@ -354,6 +354,7 @@ class EasySourceFlowService:
             source_type = detect_source_type(canonical_url)
             if source_type in {"bilibili", "youtube"}:
                 summary_quality = "pro"
+            self.store.update_summary_quality(job_id, summary_quality)
             cache_context = _cache_context(self.settings, summary_quality)
             cached = None if force_refresh else self.store.get_cached_result(
                 canonical_url,
